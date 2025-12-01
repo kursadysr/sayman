@@ -1,36 +1,90 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Sayman - Multi-Tenant Finance & Bookkeeping App
+
+A mobile-first SaaS application for managing personal finances and business bookkeeping with multi-tenant support.
+
+## Features
+
+- **Multi-Tenant Architecture** - Manage multiple organizations (Personal, Retail, Service) with a single login
+- **Tenant Switching** - Seamlessly switch between workspaces
+- **Transactions** - Track income and expenses with category support
+- **Bills (Accounts Payable)** - Create bills and record partial payments
+- **Invoicing** - Create professional invoices with PDF generation
+- **Contacts** - Manage vendors and customers
+- **Dashboard** - Overview of finances with summary cards
+
+## Tech Stack
+
+- **Frontend:** Next.js 16 (App Router), TypeScript, Tailwind CSS, Shadcn/UI
+- **Backend:** Supabase (PostgreSQL, Auth, Storage)
+- **State Management:** Zustand (global UI state), TanStack Query (server state)
+- **Forms:** React Hook Form + Zod
+- **PDF Generation:** @react-pdf/renderer
 
 ## Getting Started
 
-First, run the development server:
+### 1. Setup Supabase
+
+1. Create a new Supabase project at [supabase.com](https://supabase.com)
+2. Go to SQL Editor and run the schema from `supabase/schema.sql`
+3. Copy your project URL and anon key from Settings → API
+
+### 2. Configure Environment
+
+Create a `.env.local` file in the project root:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. Install & Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open [http://localhost:3000](http://localhost:3000)
 
-## Learn More
+## Project Structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+/src
+  /app
+    /(auth)              # Login, Signup pages
+    /(dashboard)         # Protected dashboard pages
+  /components
+    /ui                  # Shadcn UI components
+    /layout              # App shell, navigation
+    /shared              # TenantSwitcher
+  /features
+    /auth                # Auth actions
+    /transactions        # Add transaction drawer
+    /bills               # Bill payment dialog
+    /contacts            # Contact management
+    /invoicing           # Invoice builder, PDF
+  /lib
+    /supabase            # Client, server, types
+    /store               # Zustand stores
+    /utils               # Formatters
+  /hooks                 # Custom hooks
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Database Schema
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The app uses a multi-tenant database with Row Level Security (RLS):
 
-## Deploy on Vercel
+- **profiles** - User profiles
+- **tenants** - Organizations/workspaces
+- **tenant_users** - User-tenant relationships with roles
+- **accounts** - Bank/cash/credit accounts
+- **categories** - Income/expense categories
+- **contacts** - Vendors and customers
+- **bills** - Accounts payable
+- **invoices** - Accounts receivable
+- **invoice_lines** - Invoice line items
+- **transactions** - Cash flow records
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## License
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT
