@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { TenantSwitcher } from '@/components/shared/tenant-switcher';
 import { useTenant } from '@/hooks/use-tenant';
+import { useTenantStore } from '@/lib/store/tenant-store';
 import { createClient } from '@/lib/supabase/client';
 import type { Tenant } from '@/lib/supabase/types';
 
@@ -42,9 +43,12 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { tenant, tenants, setTenants, setCurrentTenant } = useTenant();
+  const hasHydrated = useTenantStore((state) => state.hasHydrated);
 
-  // Load tenants on mount
+  // Load tenants after store hydration
   useEffect(() => {
+    if (!hasHydrated) return;
+
     const loadTenants = async () => {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
@@ -66,8 +70,9 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
         
         setTenants(loadedTenants);
         
-        // Set first tenant as current if none selected
-        if (!tenant && loadedTenants.length > 0) {
+        // Check if current tenant (from localStorage) is still valid
+        const currentIsValid = tenant && loadedTenants.some(t => t.id === tenant.id);
+        if (!currentIsValid && loadedTenants.length > 0) {
           setCurrentTenant(loadedTenants[0]);
         }
       } else {
@@ -78,7 +83,7 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
     };
 
     loadTenants();
-  }, [router, setTenants, setCurrentTenant, tenant]);
+  }, [hasHydrated, router, setTenants, setCurrentTenant, tenant]);
 
   const handleSignOut = async () => {
     const supabase = createClient();
