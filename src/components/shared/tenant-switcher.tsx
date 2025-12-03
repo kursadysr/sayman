@@ -76,13 +76,6 @@ export function TenantSwitcher() {
       return;
     }
 
-    // Create default cash account
-    await supabase.from('accounts').insert({
-      tenant_id: newTenant.id,
-      name: 'Cash',
-      type: 'cash',
-    });
-
     // Update state
     setTenants([...tenants, newTenant]);
     setCurrentTenant(newTenant);

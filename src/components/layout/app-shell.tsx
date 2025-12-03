@@ -14,6 +14,7 @@ import {
   Menu,
   Plus,
   Package,
+  Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -26,11 +27,12 @@ import type { Tenant } from '@/lib/supabase/types';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Transactions', href: '/transactions', icon: ArrowLeftRight },
+  { name: 'Accounts', href: '/accounts', icon: Wallet },
   { name: 'Bills', href: '/bills', icon: Receipt },
-  { name: 'Items', href: '/items', icon: Package },
   { name: 'Invoices', href: '/invoices', icon: FileText },
   { name: 'Contacts', href: '/contacts', icon: Users },
+  { name: 'Items', href: '/items', icon: Package },
+  { name: 'Ledger', href: '/transactions', icon: ArrowLeftRight },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
