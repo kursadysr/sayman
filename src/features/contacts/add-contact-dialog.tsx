@@ -36,11 +36,12 @@ import { toast } from 'sonner';
 
 const formSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  type: z.enum(['vendor', 'customer']),
+  type: z.enum(['vendor', 'customer', 'employee']),
   email: z.string().email().optional().or(z.literal('')),
   phone: z.string().optional(),
   tax_id: z.string().optional(),
   address: z.string().optional(),
+  hourly_rate: z.number().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -70,8 +71,27 @@ export function AddContactDialog({
       phone: '',
       tax_id: '',
       address: '',
+      hourly_rate: 0,
     },
   });
+
+  const watchType = form.watch('type');
+
+  // Reset form when dialog opens with new defaultType
+  const handleOpenChange = (open: boolean) => {
+    if (open) {
+      form.reset({
+        name: '',
+        type: defaultType,
+        email: '',
+        phone: '',
+        tax_id: '',
+        address: '',
+        hourly_rate: 0,
+      });
+    }
+    onOpenChange(open);
+  };
 
   const onSubmit = async (values: FormValues) => {
     if (!tenant) return;
@@ -88,6 +108,7 @@ export function AddContactDialog({
         phone: values.phone || null,
         tax_id: values.tax_id || null,
         address: values.address || null,
+        hourly_rate: values.type === 'employee' ? (values.hourly_rate || 0) : 0,
       });
 
       if (error) throw error;
@@ -105,12 +126,12 @@ export function AddContactDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="bg-slate-800 border-slate-700 text-white">
         <DialogHeader>
           <DialogTitle>Add Contact</DialogTitle>
           <DialogDescription className="text-slate-400">
-            Add a new vendor or customer to your contacts.
+            Add a new vendor, customer, or employee.
           </DialogDescription>
         </DialogHeader>
 
@@ -131,6 +152,7 @@ export function AddContactDialog({
                     <SelectContent className="bg-slate-800 border-slate-700">
                       <SelectItem value="vendor" className="text-white">Vendor</SelectItem>
                       <SelectItem value="customer" className="text-white">Customer</SelectItem>
+                      <SelectItem value="employee" className="text-white">Employee</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -146,7 +168,7 @@ export function AddContactDialog({
                   <FormLabel className="text-slate-300">Name</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="Company or person name"
+                      placeholder={watchType === 'employee' ? 'Employee name' : 'Company or person name'}
                       {...field}
                       className="bg-slate-700/50 border-slate-600 text-white"
                     />
@@ -155,6 +177,29 @@ export function AddContactDialog({
                 </FormItem>
               )}
             />
+
+            {watchType === 'employee' && (
+              <FormField
+                control={form.control}
+                name="hourly_rate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-slate-300">Hourly Rate</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        {...field}
+                        onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                        className="bg-slate-700/50 border-slate-600 text-white"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <FormField
               control={form.control}

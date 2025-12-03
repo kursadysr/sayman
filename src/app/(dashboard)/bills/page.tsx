@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
+import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { RecordPaymentDialog } from '@/features/bills/record-payment-dialog';
@@ -22,6 +23,7 @@ const statusConfig = {
 
 export default function BillsPage() {
   const { tenant } = useTenant();
+  const { canWrite } = useRole();
   const [bills, setBills] = useState<Bill[]>([]);
   const [payments, setPayments] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -101,13 +103,15 @@ export default function BillsPage() {
           <h1 className="text-2xl font-bold text-white">Bills</h1>
           <p className="text-slate-400">Manage your accounts payable</p>
         </div>
-        <Button
-          onClick={() => setAddBillDrawerOpen(true)}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Add Bill
-        </Button>
+        {canWrite && (
+          <Button
+            onClick={() => setAddBillDrawerOpen(true)}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Bill
+          </Button>
+        )}
       </div>
 
       {/* Filter Tabs */}
@@ -192,26 +196,28 @@ export default function BillsPage() {
                       </div>
                     </div>
                     
-                    <div className="flex justify-end gap-2 mt-3">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleEditBill(bill)}
-                        className="border-slate-600 text-slate-300 hover:bg-slate-700"
-                      >
-                        <Pencil className="h-3 w-3 mr-1" />
-                        Edit
-                      </Button>
-                      {bill.status !== 'paid' && (
+                    {canWrite && (
+                      <div className="flex justify-end gap-2 mt-3">
                         <Button
                           size="sm"
-                          onClick={() => handleRecordPayment(bill)}
-                          className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                          variant="outline"
+                          onClick={() => handleEditBill(bill)}
+                          className="border-slate-600 text-slate-300 hover:bg-slate-700"
                         >
-                          Record Payment
+                          <Pencil className="h-3 w-3 mr-1" />
+                          Edit
                         </Button>
-                      )}
-                    </div>
+                        {bill.status !== 'paid' && (
+                          <Button
+                            size="sm"
+                            onClick={() => handleRecordPayment(bill)}
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                          >
+                            Record Payment
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

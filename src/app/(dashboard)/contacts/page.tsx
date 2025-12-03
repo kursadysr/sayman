@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Users, Building2, User, Mail, Phone, ChevronRight } from 'lucide-react';
+import { Plus, Users, Building2, User, Mail, Phone, ChevronRight, UserCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
+import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/utils/format';
 import { AddContactDialog } from '@/features/contacts/add-contact-dialog';
@@ -15,9 +16,10 @@ import type { Contact, ContactType } from '@/lib/supabase/types';
 
 export default function ContactsPage() {
   const { tenant } = useTenant();
+  const { canWrite } = useRole();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'vendor' | 'customer'>('all');
+  const [filter, setFilter] = useState<'all' | 'vendor' | 'customer' | 'employee'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [defaultType, setDefaultType] = useState<ContactType>('vendor');
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
@@ -71,45 +73,68 @@ export default function ContactsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Contacts</h1>
-          <p className="text-slate-400">Manage your vendors and customers</p>
+          <p className="text-slate-400">Manage vendors, customers & employees</p>
         </div>
-        <div className="hidden lg:flex gap-2">
-          <Button
-            onClick={() => handleAddContact('vendor')}
-            variant="outline"
-            className="border-slate-600 text-slate-300 hover:bg-slate-700"
-          >
-            <Building2 className="mr-2 h-4 w-4" />
-            Add Vendor
-          </Button>
-          <Button
-            onClick={() => handleAddContact('customer')}
-            className="bg-emerald-500 hover:bg-emerald-600 text-white"
-          >
-            <User className="mr-2 h-4 w-4" />
-            Add Customer
-          </Button>
-        </div>
+        {canWrite && (
+          <div className="hidden lg:flex gap-2">
+            <Button
+              onClick={() => handleAddContact('vendor')}
+              variant="outline"
+              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+            >
+              <Building2 className="mr-2 h-4 w-4" />
+              Vendor
+            </Button>
+            <Button
+              onClick={() => handleAddContact('customer')}
+              variant="outline"
+              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+            >
+              <User className="mr-2 h-4 w-4" />
+              Customer
+            </Button>
+            <Button
+              onClick={() => handleAddContact('employee')}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              <UserCog className="mr-2 h-4 w-4" />
+              Employee
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Mobile Add Buttons */}
-      <div className="flex gap-2 mb-6 lg:hidden">
-        <Button
-          onClick={() => handleAddContact('vendor')}
-          variant="outline"
-          className="flex-1 border-slate-600 text-slate-300"
-        >
-          <Building2 className="mr-2 h-4 w-4" />
-          Vendor
-        </Button>
-        <Button
-          onClick={() => handleAddContact('customer')}
-          className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
-        >
-          <User className="mr-2 h-4 w-4" />
-          Customer
-        </Button>
-      </div>
+      {canWrite && (
+        <div className="flex gap-2 mb-6 lg:hidden">
+          <Button
+            onClick={() => handleAddContact('vendor')}
+            variant="outline"
+            size="sm"
+            className="flex-1 border-slate-600 text-slate-300"
+          >
+            <Building2 className="mr-1 h-3 w-3" />
+            Vendor
+          </Button>
+          <Button
+            onClick={() => handleAddContact('customer')}
+            variant="outline"
+            size="sm"
+            className="flex-1 border-slate-600 text-slate-300"
+          >
+            <User className="mr-1 h-3 w-3" />
+            Customer
+          </Button>
+          <Button
+            onClick={() => handleAddContact('employee')}
+            size="sm"
+            className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
+          >
+            <UserCog className="mr-1 h-3 w-3" />
+            Employee
+          </Button>
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <Tabs value={filter} onValueChange={(v) => setFilter(v as typeof filter)} className="mb-6">
@@ -123,6 +148,9 @@ export default function ContactsPage() {
           <TabsTrigger value="customer" className="data-[state=active]:bg-slate-700">
             Customers
           </TabsTrigger>
+          <TabsTrigger value="employee" className="data-[state=active]:bg-slate-700">
+            Employees
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -135,13 +163,15 @@ export default function ContactsPage() {
             <div className="p-8 text-center text-slate-400">
               <Users className="h-12 w-12 mx-auto mb-4 text-slate-600" />
               <p>No contacts found.</p>
-              <Button
-                onClick={() => handleAddContact('vendor')}
-                className="mt-4 bg-emerald-500 hover:bg-emerald-600 text-white"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add Your First Contact
-              </Button>
+              {canWrite && (
+                <Button
+                  onClick={() => handleAddContact('vendor')}
+                  className="mt-4 bg-emerald-500 hover:bg-emerald-600 text-white"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Your First Contact
+                </Button>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-slate-700">
@@ -157,13 +187,17 @@ export default function ContactsPage() {
                         className={`p-2 rounded-full shrink-0 ${
                           contact.type === 'vendor'
                             ? 'bg-purple-500/10'
-                            : 'bg-cyan-500/10'
+                            : contact.type === 'customer'
+                            ? 'bg-cyan-500/10'
+                            : 'bg-amber-500/10'
                         }`}
                       >
                         {contact.type === 'vendor' ? (
                           <Building2 className="h-5 w-5 text-purple-400" />
-                        ) : (
+                        ) : contact.type === 'customer' ? (
                           <User className="h-5 w-5 text-cyan-400" />
+                        ) : (
+                          <UserCog className="h-5 w-5 text-amber-400" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -173,10 +207,12 @@ export default function ContactsPage() {
                             className={
                               contact.type === 'vendor'
                                 ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-                                : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                                : contact.type === 'customer'
+                                ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                                : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
                             }
                           >
-                            {contact.type === 'vendor' ? 'Vendor' : 'Customer'}
+                            {contact.type === 'vendor' ? 'Vendor' : contact.type === 'customer' ? 'Customer' : 'Employee'}
                           </Badge>
                         </div>
                         <div className="flex items-center gap-4 mt-1 text-sm text-slate-400">
@@ -199,12 +235,8 @@ export default function ContactsPage() {
                       {contact.balance !== 0 && (
                         <div className="text-right">
                           <div className="text-xs text-slate-400">
-                            {contact.type === 'vendor'
-                              ? contact.balance > 0
-                                ? 'Balance'
-                                : 'Credit'
-                              : contact.balance > 0
-                              ? 'Balance'
+                            {contact.balance > 0
+                              ? contact.type === 'employee' ? 'Owed' : 'Balance'
                               : 'Credit'}
                           </div>
                           <div

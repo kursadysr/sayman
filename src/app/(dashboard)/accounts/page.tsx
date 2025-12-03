@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useTenant } from '@/hooks/use-tenant';
+import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import type { Account } from '@/lib/supabase/types';
 import { toast } from 'sonner';
@@ -53,6 +54,7 @@ const typeIcons = {
 
 export default function AccountsPage() {
   const { tenant } = useTenant();
+  const { canWrite } = useRole();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -146,13 +148,15 @@ export default function AccountsPage() {
           <h1 className="text-2xl font-bold text-white">Accounts</h1>
           <p className="text-slate-400">Manage your bank accounts, cash & credit cards</p>
         </div>
-        <Button
-          onClick={() => setDialogOpen(true)}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white"
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Add Account
-        </Button>
+        {canWrite && (
+          <Button
+            onClick={() => setDialogOpen(true)}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Add Account
+          </Button>
+        )}
       </div>
 
       {/* Total Balance Card */}
@@ -205,14 +209,16 @@ export default function AccountsPage() {
                       <p className={`text-lg font-bold ${account.balance >= 0 ? 'text-white' : 'text-red-400'}`}>
                         {formatCurrency(account.balance, tenant.currency)}
                       </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => onDeleteAccount(account.id)}
-                        className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canWrite && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onDeleteAccount(account.id)}
+                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );

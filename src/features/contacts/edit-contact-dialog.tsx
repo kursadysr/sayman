@@ -33,6 +33,7 @@ const formSchema = z.object({
   phone: z.string().optional(),
   tax_id: z.string().optional(),
   address: z.string().optional(),
+  hourly_rate: z.number().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -61,6 +62,7 @@ export function EditContactDialog({
       phone: '',
       tax_id: '',
       address: '',
+      hourly_rate: 0,
     },
   });
 
@@ -73,6 +75,7 @@ export function EditContactDialog({
         phone: contact.phone || '',
         tax_id: contact.tax_id || '',
         address: contact.address || '',
+        hourly_rate: contact.hourly_rate || 0,
       });
     }
   }, [contact, open, form]);
@@ -92,6 +95,7 @@ export function EditContactDialog({
           phone: values.phone || null,
           tax_id: values.tax_id || null,
           address: values.address || null,
+          hourly_rate: contact.type === 'employee' ? (values.hourly_rate || 0) : contact.hourly_rate,
         })
         .eq('id', contact.id);
 
@@ -116,7 +120,7 @@ export function EditContactDialog({
         <DialogHeader>
           <DialogTitle>Edit Contact</DialogTitle>
           <DialogDescription className="text-slate-400">
-            Update {contact.type === 'vendor' ? 'vendor' : 'customer'} information.
+            Update {contact.type === 'vendor' ? 'vendor' : contact.type === 'customer' ? 'customer' : 'employee'} information.
           </DialogDescription>
         </DialogHeader>
 
@@ -130,7 +134,7 @@ export function EditContactDialog({
                   <FormLabel className="text-slate-300">Name</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="Company or person name"
+                      placeholder={contact.type === 'employee' ? 'Employee name' : 'Company or person name'}
                       {...field}
                       className="bg-slate-700/50 border-slate-600 text-white"
                     />
@@ -139,6 +143,29 @@ export function EditContactDialog({
                 </FormItem>
               )}
             />
+
+            {contact.type === 'employee' && (
+              <FormField
+                control={form.control}
+                name="hourly_rate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-slate-300">Hourly Rate</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        {...field}
+                        onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                        className="bg-slate-700/50 border-slate-600 text-white"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <FormField
               control={form.control}

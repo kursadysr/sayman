@@ -4,7 +4,8 @@ export type TenantType = 'personal' | 'retail' | 'service';
 export type UserRole = 'owner' | 'manager' | 'viewer';
 export type AccountType = 'bank' | 'cash' | 'credit';
 export type CategoryType = 'income' | 'expense' | 'transfer' | 'cogs';
-export type ContactType = 'vendor' | 'customer';
+export type ContactType = 'vendor' | 'customer' | 'employee';
+export type TimesheetStatus = 'unpaid' | 'paid';
 export type BillStatus = 'unpaid' | 'partial' | 'paid';
 export type InvoiceStatus = 'draft' | 'sent' | 'partial' | 'paid';
 export type InvoiceLayout = 'service' | 'product';
@@ -85,8 +86,35 @@ export interface Contact {
   tax_id: string | null;
   address: string | null;
   balance: number;
+  hourly_rate: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface TimesheetCategory {
+  id: string;
+  tenant_id: string;
+  name: string;
+  is_hourly: boolean;
+  created_at: string;
+}
+
+export interface Timesheet {
+  id: string;
+  tenant_id: string;
+  employee_id: string;
+  category_id: string | null;
+  date: string;
+  hours: number;
+  minutes: number;
+  hourly_rate: number;
+  total_amount: number;
+  description: string | null;
+  status: TimesheetStatus;
+  created_at: string;
+  updated_at: string;
+  employee?: Contact;
+  category?: TimesheetCategory;
 }
 
 export interface Bill {
@@ -160,12 +188,14 @@ export interface Transaction {
   status: TransactionStatus;
   bill_id: string | null;
   invoice_id: string | null;
+  timesheet_id: string | null;
   created_at: string;
   updated_at: string;
   account?: Account;
   category?: Category;
   bill?: Bill;
   invoice?: Invoice;
+  timesheet?: Timesheet;
 }
 
 // Form input types

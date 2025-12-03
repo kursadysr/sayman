@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
+import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { CreateInvoiceDialog } from '@/features/invoicing/create-invoice-dialog';
@@ -36,6 +37,7 @@ interface InvoiceWithDetails extends Invoice {
 
 export default function InvoicesPage() {
   const { tenant } = useTenant();
+  const { canWrite } = useRole();
   const [invoices, setInvoices] = useState<InvoiceWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'draft' | 'sent' | 'partial' | 'paid'>('all');
@@ -114,14 +116,16 @@ export default function InvoicesPage() {
           <h1 className="text-2xl font-bold text-white">Invoices</h1>
           <p className="text-slate-400">Manage your accounts receivable</p>
         </div>
-        <Button
-          onClick={() => setDialogOpen(true)}
-          className="bg-emerald-500 hover:bg-emerald-600 text-white"
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          <span className="hidden sm:inline">Create Invoice</span>
-          <span className="sm:hidden">New</span>
-        </Button>
+        {canWrite && (
+          <Button
+            onClick={() => setDialogOpen(true)}
+            className="bg-emerald-500 hover:bg-emerald-600 text-white"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            <span className="hidden sm:inline">Create Invoice</span>
+            <span className="sm:hidden">New</span>
+          </Button>
+        )}
       </div>
 
       {/* Filter Tabs */}
@@ -151,13 +155,15 @@ export default function InvoicesPage() {
             <div className="p-8 text-center text-slate-400">
               <FileText className="h-12 w-12 mx-auto mb-4 text-slate-600" />
               <p>No invoices found.</p>
-              <Button
-                onClick={() => setDialogOpen(true)}
-                className="mt-4 bg-emerald-500 hover:bg-emerald-600 text-white"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Create Your First Invoice
-              </Button>
+              {canWrite && (
+                <Button
+                  onClick={() => setDialogOpen(true)}
+                  className="mt-4 bg-emerald-500 hover:bg-emerald-600 text-white"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Your First Invoice
+                </Button>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-slate-700">

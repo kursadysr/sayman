@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useTenant } from '@/hooks/use-tenant';
+import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import type { Contact } from '@/lib/supabase/types';
@@ -41,6 +42,7 @@ interface ItemWithHistory extends Item {
 
 export default function ItemsPage() {
   const { tenant } = useTenant();
+  const { canWrite } = useRole();
   const [vendors, setVendors] = useState<Contact[]>([]);
   const [selectedVendorId, setSelectedVendorId] = useState<string>('');
   const [items, setItems] = useState<ItemWithHistory[]>([]);
@@ -281,14 +283,16 @@ export default function ItemsPage() {
                             ) : (
                               <div className="flex items-center gap-2">
                                 <span className="font-medium text-white">{item.name}</span>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => handleStartEdit(item)}
-                                  className="text-slate-400 hover:text-white h-6 w-6 p-0"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </Button>
+                                {canWrite && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleStartEdit(item)}
+                                    className="text-slate-400 hover:text-white h-6 w-6 p-0"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </Button>
+                                )}
                               </div>
                             )}
                           </div>
