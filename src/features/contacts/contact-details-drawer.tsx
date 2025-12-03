@@ -17,6 +17,7 @@ import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { EditContactDialog } from './edit-contact-dialog';
 import { AddTimesheetDrawer } from './add-timesheet-drawer';
+import { EditTimesheetDrawer } from './edit-timesheet-drawer';
 import type { Contact, Bill, Transaction, Timesheet } from '@/lib/supabase/types';
 
 interface LedgerEntry {
@@ -30,6 +31,7 @@ interface LedgerEntry {
   hours?: number;
   minutes?: number;
   categoryName?: string;
+  timesheetId?: string; // Raw timesheet ID for editing
 }
 
 interface ContactDetailsDrawerProps {
@@ -46,6 +48,9 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
   const [loading, setLoading] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [timesheetDrawerOpen, setTimesheetDrawerOpen] = useState(false);
+  const [editTimesheetDrawerOpen, setEditTimesheetDrawerOpen] = useState(false);
+  const [timesheetsMap, setTimesheetsMap] = useState<Map<string, Timesheet>>(new Map());
+  const [selectedTimesheet, setSelectedTimesheet] = useState<Timesheet | null>(null);
 
   const loadLedger = async () => {
     if (!contact || !tenant) return;
@@ -80,11 +85,13 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
         payments = (paymentsData || []) as Transaction[];
       }
 
+      // Store timesheets for editing
+      const tsMap = new Map<string, Timesheet>();
+      timesheets.forEach((ts) => tsMap.set(ts.id, ts));
+      setTimesheetsMap(tsMap);
+
       // Add timesheets
       timesheets.forEach((ts) => {
-        const timeStr = ts.hours > 0 || ts.minutes > 0 
-          ? `${ts.hours}h ${ts.minutes || 0}m` 
-          : '';
         entries.push({
           id: `timesheet-${ts.id}`,
           date: ts.date,
@@ -96,6 +103,7 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
           hours: ts.hours,
           minutes: ts.minutes,
           categoryName: ts.category?.name,
+          timesheetId: ts.id,
         });
       });
 
@@ -309,7 +317,7 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
                   {ledger.map((entry) => (
                     <div
                       key={entry.id}
-                      className="p-3 bg-slate-700/30 rounded-lg flex items-center justify-between"
+                      className="p-3 bg-slate-700/30 rounded-lg flex items-center justify-between group"
                     >
                       <div className="flex items-center gap-3">
                         <div
@@ -349,17 +357,35 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
                           </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div
-                          className={`font-medium ${
-                            entry.type === 'bill' || entry.type === 'timesheet' ? 'text-red-400' : 'text-green-400'
-                          }`}
-                        >
-                          {entry.type === 'bill' || entry.type === 'timesheet' ? '+' : '-'}
-                          {formatCurrency(entry.amount, tenant?.currency || 'USD')}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                          Balance: {formatCurrency(entry.balance_after, tenant?.currency || 'USD')}
+                      <div className="flex items-center gap-3">
+                        {canWrite && entry.type === 'timesheet' && entry.timesheetId && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-white h-7 px-2"
+                            onClick={() => {
+                              const ts = timesheetsMap.get(entry.timesheetId!);
+                              if (ts) {
+                                setSelectedTimesheet(ts);
+                                setEditTimesheetDrawerOpen(true);
+                              }
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <div className="text-right">
+                          <div
+                            className={`font-medium ${
+                              entry.type === 'bill' || entry.type === 'timesheet' ? 'text-red-400' : 'text-green-400'
+                            }`}
+                          >
+                            {entry.type === 'bill' || entry.type === 'timesheet' ? '+' : '-'}
+                            {formatCurrency(entry.amount, tenant?.currency || 'USD')}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            Balance: {formatCurrency(entry.balance_after, tenant?.currency || 'USD')}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -386,6 +412,16 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
       open={timesheetDrawerOpen}
       onOpenChange={setTimesheetDrawerOpen}
       defaultEmployeeId={contact.id}
+      onSuccess={() => {
+        loadLedger();
+        onContactUpdate?.();
+      }}
+    />
+
+    <EditTimesheetDrawer
+      timesheet={selectedTimesheet}
+      open={editTimesheetDrawerOpen}
+      onOpenChange={setEditTimesheetDrawerOpen}
       onSuccess={() => {
         loadLedger();
         onContactUpdate?.();
