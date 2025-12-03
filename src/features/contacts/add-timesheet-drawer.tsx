@@ -58,7 +58,7 @@ interface LineItem {
 const formSchema = z.object({
   employee_id: z.string().min(1, 'Employee is required'),
   date: z.string().min(1, 'Date is required'),
-  isPaid: z.boolean().default(false),
+  isPaid: z.boolean(),
   account_id: z.string().optional(),
 });
 

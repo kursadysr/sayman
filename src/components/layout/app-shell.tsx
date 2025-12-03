@@ -15,6 +15,7 @@ import {
   Plus,
   Package,
   Wallet,
+  Landmark,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ const navigation = [
   { name: 'Accounts', href: '/accounts', icon: Wallet },
   { name: 'Bills', href: '/bills', icon: Receipt },
   { name: 'Invoices', href: '/invoices', icon: FileText },
+  { name: 'Loans', href: '/loans', icon: Landmark },
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Items', href: '/items', icon: Package },
   { name: 'Ledger', href: '/transactions', icon: ArrowLeftRight },

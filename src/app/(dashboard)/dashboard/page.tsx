@@ -18,7 +18,7 @@ import {
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Wallet, Receipt, CreditCard, Users, Clock, Building2, Settings2, GripVertical, Eye, EyeOff } from 'lucide-react';
+import { Wallet, Receipt, CreditCard, Users, Clock, Building2, Settings2, GripVertical, Eye, EyeOff, Landmark, TrendingDown, TrendingUp } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -36,24 +36,28 @@ import { formatCurrency, formatDate } from '@/lib/utils/format';
 import type { Account } from '@/lib/supabase/types';
 
 // Widget definitions
-const WIDGETS = {
+const WIDGETS: Record<string, { id: string; label: string; icon: any; color: string; fullWidth?: boolean }> = {
   cashBalance: { id: 'cashBalance', label: 'Cash Balance', icon: Wallet, color: 'emerald' },
   totalPayables: { id: 'totalPayables', label: 'Total Payables', icon: Users, color: 'red' },
   accountsPayable: { id: 'accountsPayable', label: 'Accounts Payable', icon: Building2, color: 'orange' },
   wagesPayable: { id: 'wagesPayable', label: 'Wages Payable', icon: Clock, color: 'amber' },
+  loansPayable: { id: 'loansPayable', label: 'Loans Payable', icon: TrendingDown, color: 'red' },
+  loansReceivable: { id: 'loansReceivable', label: 'Loans Receivable', icon: TrendingUp, color: 'emerald' },
   expensesThisMonth: { id: 'expensesThisMonth', label: 'Expenses (Month)', icon: Receipt, color: 'orange' },
   wagesThisMonth: { id: 'wagesThisMonth', label: 'Wages (Month)', icon: Clock, color: 'amber' },
   paymentsThisMonth: { id: 'paymentsThisMonth', label: 'Payments (Month)', icon: CreditCard, color: 'cyan' },
   recentActivity: { id: 'recentActivity', label: 'Recent Activity', icon: Receipt, color: 'slate', fullWidth: true },
-} as const;
+};
 
-type WidgetId = keyof typeof WIDGETS;
+type WidgetId = 'cashBalance' | 'totalPayables' | 'accountsPayable' | 'wagesPayable' | 'loansPayable' | 'loansReceivable' | 'expensesThisMonth' | 'wagesThisMonth' | 'paymentsThisMonth' | 'recentActivity';
 
 const DEFAULT_LAYOUT: WidgetId[] = [
   'cashBalance',
   'totalPayables', 
   'accountsPayable',
   'wagesPayable',
+  'loansPayable',
+  'loansReceivable',
   'expensesThisMonth',
   'wagesThisMonth',
   'paymentsThisMonth',
@@ -65,6 +69,8 @@ const DEFAULT_VISIBLE: Record<WidgetId, boolean> = {
   totalPayables: true,
   accountsPayable: true,
   wagesPayable: true,
+  loansPayable: true,
+  loansReceivable: true,
   expensesThisMonth: true,
   wagesThisMonth: true,
   paymentsThisMonth: true,
@@ -75,6 +81,8 @@ interface DashboardStats {
   cashBalance: number;
   vendorPayables: number;
   wagesPayable: number;
+  loansPayable: number;
+  loansReceivable: number;
   totalPayables: number;
   expensesThisMonth: number;
   wagesThisMonth: number;
@@ -138,6 +146,8 @@ export default function DashboardPage() {
     cashBalance: 0,
     vendorPayables: 0,
     wagesPayable: 0,
+    loansPayable: 0,
+    loansReceivable: 0,
     totalPayables: 0,
     expensesThisMonth: 0,
     wagesThisMonth: 0,
@@ -257,7 +267,22 @@ export default function DashboardPage() {
         0
       );
 
-      const totalPayables = vendorPayables + wagesPayable;
+      // Get loans
+      const { data: loansData } = await supabase
+        .from('loans')
+        .select('type, remaining_balance, status')
+        .eq('tenant_id', tenant.id)
+        .eq('status', 'active');
+
+      const loansPayable = (loansData || [])
+        .filter((l: any) => l.type === 'payable')
+        .reduce((sum: number, l: any) => sum + Number(l.remaining_balance), 0);
+
+      const loansReceivable = (loansData || [])
+        .filter((l: any) => l.type === 'receivable')
+        .reduce((sum: number, l: any) => sum + Number(l.remaining_balance), 0);
+
+      const totalPayables = vendorPayables + wagesPayable + loansPayable;
 
       // Get bills this month
       const startOfMonth = new Date();
@@ -312,6 +337,8 @@ export default function DashboardPage() {
         cashBalance,
         vendorPayables,
         wagesPayable,
+        loansPayable,
+        loansReceivable,
         totalPayables,
         expensesThisMonth,
         wagesThisMonth,
@@ -483,6 +510,38 @@ export default function DashboardPage() {
                 {loading ? '...' : formatCurrency(stats.wagesPayable, tenant?.currency || 'USD')}
               </div>
               <p className="text-xs text-slate-500 mt-1">Owed to employees</p>
+            </CardContent>
+          </Card>
+        );
+
+      case 'loansPayable':
+        return (
+          <Card className="bg-slate-800/50 border-slate-700 h-full">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-slate-400">Loans Payable</CardTitle>
+              <TrendingDown className="h-4 w-4 text-red-400" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-red-400">
+                {loading ? '...' : formatCurrency(stats.loansPayable, tenant?.currency || 'USD')}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Outstanding loan debt</p>
+            </CardContent>
+          </Card>
+        );
+
+      case 'loansReceivable':
+        return (
+          <Card className="bg-slate-800/50 border-slate-700 h-full">
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-slate-400">Loans Receivable</CardTitle>
+              <TrendingUp className="h-4 w-4 text-emerald-400" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-emerald-400">
+                {loading ? '...' : formatCurrency(stats.loansReceivable, tenant?.currency || 'USD')}
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Money owed to you</p>
             </CardContent>
           </Card>
         );

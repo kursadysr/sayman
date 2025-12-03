@@ -10,6 +10,9 @@ export type BillStatus = 'unpaid' | 'partial' | 'paid';
 export type InvoiceStatus = 'draft' | 'sent' | 'partial' | 'paid';
 export type InvoiceLayout = 'service' | 'product';
 export type TransactionStatus = 'cleared' | 'pending';
+export type LoanType = 'payable' | 'receivable';
+export type LoanStatus = 'active' | 'paid_off' | 'defaulted';
+export type PaymentFrequency = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'annually';
 
 export interface Profile {
   id: string;
@@ -198,6 +201,44 @@ export interface Transaction {
   timesheet?: Timesheet;
 }
 
+export interface Loan {
+  id: string;
+  tenant_id: string;
+  contact_id: string | null;
+  type: LoanType;
+  name: string;
+  principal_amount: number;
+  interest_rate: number; // Annual rate as decimal (0.05 = 5%)
+  term_months: number;
+  payment_frequency: PaymentFrequency;
+  start_date: string;
+  monthly_payment: number | null;
+  remaining_balance: number;
+  total_paid_principal: number;
+  total_paid_interest: number;
+  status: LoanStatus;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  contact?: Contact;
+  payments?: LoanPayment[];
+}
+
+export interface LoanPayment {
+  id: string;
+  loan_id: string;
+  tenant_id: string;
+  account_id: string | null;
+  payment_date: string;
+  total_amount: number;
+  principal_amount: number;
+  interest_amount: number;
+  remaining_balance: number;
+  notes: string | null;
+  created_at: string;
+  account?: Account;
+}
+
 // Form input types
 export interface CreateTenantInput {
   name: string;
@@ -267,5 +308,29 @@ export interface CreateTransactionInput {
   status?: TransactionStatus;
   bill_id?: string;
   invoice_id?: string;
+}
+
+export interface CreateLoanInput {
+  contact_id?: string;
+  type: LoanType;
+  name: string;
+  principal_amount: number;
+  interest_rate: number;
+  term_months: number;
+  payment_frequency: PaymentFrequency;
+  start_date: string;
+  monthly_payment?: number;
+  notes?: string;
+}
+
+export interface CreateLoanPaymentInput {
+  loan_id: string;
+  account_id?: string;
+  payment_date: string;
+  total_amount: number;
+  principal_amount: number;
+  interest_amount: number;
+  remaining_balance: number;
+  notes?: string;
 }
 
