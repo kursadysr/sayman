@@ -1,12 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Save } from 'lucide-react';
+import { Save, Plus, Trash2, UserPlus, Crown, Shield, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Form,
   FormControl,
@@ -23,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
@@ -36,11 +44,43 @@ const tenantFormSchema = z.object({
   footer_note: z.string().optional(),
 });
 
+const memberFormSchema = z.object({
+  email: z.string().email('Valid email required'),
+  role: z.enum(['manager', 'viewer']),
+});
+
 type TenantFormValues = z.infer<typeof tenantFormSchema>;
+type MemberFormValues = z.infer<typeof memberFormSchema>;
+
+interface Member {
+  id: string;
+  user_id: string;
+  role: 'owner' | 'manager' | 'viewer';
+  profile: {
+    email: string;
+    full_name: string | null;
+  } | null;
+}
+
+const roleIcons = {
+  owner: Crown,
+  manager: Shield,
+  viewer: Eye,
+};
+
+const roleColors = {
+  owner: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  manager: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  viewer: 'bg-slate-500/10 text-slate-400 border-slate-500/20',
+};
 
 export default function SettingsPage() {
   const { tenant, setCurrentTenant } = useTenant();
   const [loading, setLoading] = useState(false);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [addingMember, setAddingMember] = useState(false);
 
   const tenantForm = useForm<TenantFormValues>({
     resolver: zodResolver(tenantFormSchema),
@@ -53,6 +93,32 @@ export default function SettingsPage() {
     },
   });
 
+  const memberForm = useForm<MemberFormValues>({
+    resolver: zodResolver(memberFormSchema),
+    defaultValues: {
+      email: '',
+      role: 'viewer',
+    },
+  });
+
+  const loadMembers = useCallback(async () => {
+    if (!tenant) return;
+
+    const supabase = createClient();
+    
+    // Get current user
+    const { data: { user } } = await supabase.auth.getUser();
+    setCurrentUserId(user?.id || null);
+
+    // Get members with profiles
+    const { data } = await supabase
+      .from('tenant_users')
+      .select('id, user_id, role, profile:profiles(email, full_name)')
+      .eq('tenant_id', tenant.id);
+
+    setMembers((data || []) as Member[]);
+  }, [tenant]);
+
   useEffect(() => {
     if (!tenant) return;
 
@@ -63,7 +129,9 @@ export default function SettingsPage() {
       tax_id: tenant.address_details?.tax_id || '',
       footer_note: tenant.address_details?.footer_note || '',
     });
-  }, [tenant, tenantForm]);
+
+    loadMembers();
+  }, [tenant, tenantForm, loadMembers]);
 
   const onSaveTenant = async (values: TenantFormValues) => {
     if (!tenant) return;
@@ -90,7 +158,7 @@ export default function SettingsPage() {
       if (error) throw error;
 
       setCurrentTenant(data);
-      toast.success('Settings saved successfully');
+      toast.success('Settings saved');
     } catch (error) {
       console.error('Error saving settings:', error);
       toast.error('Failed to save settings');
@@ -98,6 +166,81 @@ export default function SettingsPage() {
       setLoading(false);
     }
   };
+
+  const onAddMember = async (values: MemberFormValues) => {
+    if (!tenant) return;
+
+    setAddingMember(true);
+    const supabase = createClient();
+
+    try {
+      // Find user by email
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', values.email)
+        .single();
+
+      if (profileError || !profile) {
+        toast.error('User not found. They must sign up first.');
+        setAddingMember(false);
+        return;
+      }
+
+      // Check if already a member
+      const existing = members.find(m => m.user_id === profile.id);
+      if (existing) {
+        toast.error('User is already a member');
+        setAddingMember(false);
+        return;
+      }
+
+      // Add to tenant
+      const { error } = await supabase.from('tenant_users').insert({
+        tenant_id: tenant.id,
+        user_id: profile.id,
+        role: values.role,
+      });
+
+      if (error) throw error;
+
+      toast.success('Member added');
+      memberForm.reset();
+      setDialogOpen(false);
+      loadMembers();
+    } catch (error) {
+      console.error('Error adding member:', error);
+      toast.error('Failed to add member');
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const onRemoveMember = async (memberId: string, memberRole: string) => {
+    if (memberRole === 'owner') {
+      toast.error('Cannot remove the owner');
+      return;
+    }
+
+    if (!confirm('Remove this member from the workspace?')) return;
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from('tenant_users')
+      .delete()
+      .eq('id', memberId);
+
+    if (error) {
+      toast.error('Failed to remove member');
+      return;
+    }
+
+    toast.success('Member removed');
+    loadMembers();
+  };
+
+  // Check if current user is owner
+  const isOwner = members.find(m => m.user_id === currentUserId)?.role === 'owner';
 
   if (!tenant) {
     return (
@@ -117,9 +260,9 @@ export default function SettingsPage() {
       {/* Workspace Settings */}
       <Card className="bg-slate-800/50 border-slate-700">
         <CardHeader>
-          <CardTitle className="text-white">Workspace Settings</CardTitle>
+          <CardTitle className="text-white">Workspace Details</CardTitle>
           <CardDescription className="text-slate-400">
-            Update your organization details for invoices and reports.
+            Organization details for invoices and reports.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -234,7 +377,153 @@ export default function SettingsPage() {
           </Form>
         </CardContent>
       </Card>
+
+      {/* Members */}
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-white">Members</CardTitle>
+              <CardDescription className="text-slate-400">
+                People who have access to this workspace.
+              </CardDescription>
+            </div>
+            {isOwner && (
+              <Button
+                onClick={() => setDialogOpen(true)}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white"
+              >
+                <UserPlus className="mr-2 h-4 w-4" />
+                Add Member
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {members.length === 0 ? (
+              <p className="text-slate-400 text-center py-4">Loading...</p>
+            ) : (
+              members.map((member) => {
+                const RoleIcon = roleIcons[member.role];
+                return (
+                  <div
+                    key={member.id}
+                    className="flex items-center justify-between p-4 rounded-lg bg-slate-700/30"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center text-white font-medium">
+                        {(member.profile?.full_name || member.profile?.email || '?')[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-medium text-white">
+                          {member.profile?.full_name || member.profile?.email}
+                        </p>
+                        <p className="text-sm text-slate-400">{member.profile?.email}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge className={`${roleColors[member.role]} border`}>
+                        <RoleIcon className="h-3 w-3 mr-1" />
+                        {member.role}
+                      </Badge>
+                      {isOwner && member.role !== 'owner' && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onRemoveMember(member.id, member.role)}
+                          className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Add Member Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle>Add Member</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Invite someone to this workspace by their email.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Form {...memberForm}>
+            <form onSubmit={memberForm.handleSubmit(onAddMember)} className="space-y-4">
+              <FormField
+                control={memberForm.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-slate-300">Email</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="email"
+                        placeholder="user@example.com"
+                        {...field}
+                        className="bg-slate-700/50 border-slate-600 text-white"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={memberForm.control}
+                name="role"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-slate-300">Role</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        <SelectItem value="manager" className="text-white">
+                          Manager - Can edit everything
+                        </SelectItem>
+                        <SelectItem value="viewer" className="text-white">
+                          Viewer - Read-only access
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDialogOpen(false)}
+                  className="border-slate-600 text-slate-300"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={addingMember}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                >
+                  {addingMember ? 'Adding...' : 'Add Member'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-
