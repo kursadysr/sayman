@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Receipt, CreditCard, Pencil, Clock, Plus } from 'lucide-react';
+import { Receipt, CreditCard, Pencil, Clock, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Drawer,
@@ -18,6 +18,7 @@ import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { EditContactDialog } from './edit-contact-dialog';
 import { AddTimesheetDrawer } from './add-timesheet-drawer';
 import { EditTimesheetDrawer } from './edit-timesheet-drawer';
+import { DeleteContactDialog } from './delete-contact-dialog';
 import type { Contact, Bill, Transaction, Timesheet } from '@/lib/supabase/types';
 
 interface LedgerEntry {
@@ -47,6 +48,7 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [timesheetDrawerOpen, setTimesheetDrawerOpen] = useState(false);
   const [editTimesheetDrawerOpen, setEditTimesheetDrawerOpen] = useState(false);
   const [timesheetsMap, setTimesheetsMap] = useState<Map<string, Timesheet>>(new Map());
@@ -237,6 +239,16 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
                     Edit
                   </Button>
                 )}
+                {canWrite && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setDeleteDialogOpen(true)}
+                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
             </div>
           </DrawerHeader>
@@ -424,6 +436,16 @@ export function ContactDetailsDrawer({ contact, open, onOpenChange, onContactUpd
       onOpenChange={setEditTimesheetDrawerOpen}
       onSuccess={() => {
         loadLedger();
+        onContactUpdate?.();
+      }}
+    />
+
+    <DeleteContactDialog
+      contact={contact}
+      open={deleteDialogOpen}
+      onOpenChange={setDeleteDialogOpen}
+      onSuccess={() => {
+        onOpenChange(false);
         onContactUpdate?.();
       }}
     />
