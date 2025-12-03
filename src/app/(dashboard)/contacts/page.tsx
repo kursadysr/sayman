@@ -1,14 +1,16 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Users, Building2, User, Mail, Phone } from 'lucide-react';
+import { Plus, Users, Building2, User, Mail, Phone, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
+import { formatCurrency } from '@/lib/utils/format';
 import { AddContactDialog } from '@/features/contacts/add-contact-dialog';
+import { ContactDetailsDrawer } from '@/features/contacts/contact-details-drawer';
 import type { Contact, ContactType } from '@/lib/supabase/types';
 
 export default function ContactsPage() {
@@ -18,6 +20,8 @@ export default function ContactsPage() {
   const [filter, setFilter] = useState<'all' | 'vendor' | 'customer'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [defaultType, setDefaultType] = useState<ContactType>('vendor');
+  const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
 
   const loadContacts = useCallback(async () => {
     if (!tenant) return;
@@ -47,6 +51,11 @@ export default function ContactsPage() {
   const handleAddContact = (type: ContactType) => {
     setDefaultType(type);
     setDialogOpen(true);
+  };
+
+  const handleContactClick = (contact: Contact) => {
+    setSelectedContact(contact);
+    setDetailsDrawerOpen(true);
   };
 
   if (!tenant) {
@@ -139,12 +148,13 @@ export default function ContactsPage() {
               {filteredContacts.map((contact) => (
                 <div
                   key={contact.id}
-                  className="p-4 hover:bg-slate-700/30 transition-colors"
+                  onClick={() => handleContactClick(contact)}
+                  className="p-4 hover:bg-slate-700/30 transition-colors cursor-pointer"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       <div
-                        className={`p-2 rounded-full ${
+                        className={`p-2 rounded-full shrink-0 ${
                           contact.type === 'vendor'
                             ? 'bg-purple-500/10'
                             : 'bg-cyan-500/10'
@@ -156,9 +166,9 @@ export default function ContactsPage() {
                           <User className="h-5 w-5 text-cyan-400" />
                         )}
                       </div>
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <p className="font-medium text-white">{contact.name}</p>
+                          <p className="font-medium text-white truncate">{contact.name}</p>
                           <Badge
                             className={
                               contact.type === 'vendor'
@@ -173,7 +183,7 @@ export default function ContactsPage() {
                           {contact.email && (
                             <span className="flex items-center gap-1">
                               <Mail className="h-3 w-3" />
-                              {contact.email}
+                              <span className="truncate">{contact.email}</span>
                             </span>
                           )}
                           {contact.phone && (
@@ -183,10 +193,30 @@ export default function ContactsPage() {
                             </span>
                           )}
                         </div>
-                        {contact.address && (
-                          <p className="text-sm text-slate-500 mt-1">{contact.address}</p>
-                        )}
                       </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 ml-4">
+                      {contact.balance !== 0 && (
+                        <div className="text-right">
+                          <div className="text-xs text-slate-400">
+                            {contact.type === 'vendor'
+                              ? contact.balance > 0
+                                ? 'Balance'
+                                : 'Credit'
+                              : contact.balance > 0
+                              ? 'Balance'
+                              : 'Credit'}
+                          </div>
+                          <div
+                            className={`font-medium ${
+                              contact.balance > 0 ? 'text-red-400' : 'text-green-400'
+                            }`}
+                          >
+                            {formatCurrency(Math.abs(contact.balance), tenant.currency)}
+                          </div>
+                        </div>
+                      )}
+                      <ChevronRight className="h-5 w-5 text-slate-500" />
                     </div>
                   </div>
                 </div>
@@ -202,6 +232,14 @@ export default function ContactsPage() {
         onOpenChange={setDialogOpen}
         onSuccess={loadContacts}
         defaultType={defaultType}
+      />
+
+      {/* Contact Details Drawer */}
+      <ContactDetailsDrawer
+        contact={selectedContact}
+        open={detailsDrawerOpen}
+        onOpenChange={setDetailsDrawerOpen}
+        onContactUpdate={loadContacts}
       />
     </div>
   );

@@ -52,42 +52,29 @@ export function TenantSwitcher() {
     setLoading(true);
     const supabase = createClient();
     
-    // Create tenant
+    // Debug: Check if user is authenticated
+    const { data: { user } } = await supabase.auth.getUser();
+    console.log('Current user:', user?.id);
+    
+    if (!user) {
+      console.error('No authenticated user found');
+      setLoading(false);
+      return;
+    }
+    
+    // Create tenant with owner (uses DB function to bypass RLS race condition)
     const { data: newTenant, error: tenantError } = await supabase
-      .from('tenants')
-      .insert({
-        name: newTenantName,
-        type: newTenantType,
-        currency: newTenantCurrency,
-      })
-      .select()
-      .single();
+      .rpc('create_tenant_with_owner', {
+        p_name: newTenantName,
+        p_type: newTenantType,
+        p_currency: newTenantCurrency,
+      });
 
     if (tenantError || !newTenant) {
-      console.error('Error creating tenant:', tenantError);
+      console.error('Error creating tenant:', JSON.stringify(tenantError));
       setLoading(false);
       return;
     }
-
-    // Get current user
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
-    // Link user to tenant as owner
-    await supabase.from('tenant_users').insert({
-      tenant_id: newTenant.id,
-      user_id: user.id,
-      role: 'owner',
-    });
-
-    // Seed categories based on type
-    await supabase.rpc('seed_tenant_categories', {
-      p_tenant_id: newTenant.id,
-      p_type: newTenantType,
-    });
 
     // Create default cash account
     await supabase.from('accounts').insert({

@@ -85,8 +85,21 @@ CREATE TABLE contacts (
   phone TEXT,
   tax_id TEXT,
   address TEXT,
+  balance NUMERIC(15, 2) DEFAULT 0, -- Positive = we owe them (vendor) or they owe us (customer)
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Items (Products/Services for price tracking per vendor)
+CREATE TABLE items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  vendor_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  last_unit_price NUMERIC(15, 2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tenant_id, vendor_id, name)
 );
 
 -- Bills (Accounts Payable)
@@ -98,9 +111,8 @@ CREATE TABLE bills (
   status bill_status NOT NULL DEFAULT 'unpaid',
   issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
   due_date DATE,
-  total_amount NUMERIC(15, 2) NOT NULL,
+  total_amount NUMERIC(15, 2) DEFAULT 0,
   description TEXT,
-  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
   attachment_url TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -126,6 +138,20 @@ CREATE TABLE invoices (
 CREATE TABLE invoice_lines (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  quantity NUMERIC(10, 2) DEFAULT 1,
+  unit_price NUMERIC(15, 2) NOT NULL,
+  tax_rate NUMERIC(5, 2) DEFAULT 0,
+  total NUMERIC(15, 2) NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bill Lines (for itemized bills)
+CREATE TABLE bill_lines (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  bill_id UUID NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  item_id UUID REFERENCES items(id) ON DELETE SET NULL,
   description TEXT NOT NULL,
   quantity NUMERIC(10, 2) DEFAULT 1,
   unit_price NUMERIC(15, 2) NOT NULL,
@@ -161,36 +187,65 @@ ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bills ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoice_lines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bill_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: Users can read/update their own profile
 CREATE POLICY "Users can view own profile" ON profiles
   FOR SELECT USING (auth.uid() = id);
 
+CREATE POLICY "Users can insert own profile" ON profiles
+  FOR INSERT WITH CHECK (auth.uid() = id);
+
 CREATE POLICY "Users can update own profile" ON profiles
   FOR UPDATE USING (auth.uid() = id);
 
--- Tenants: Users can only see tenants they belong to
+-- Tenants: Any authenticated user can create a tenant
+CREATE POLICY "Users can create tenants" ON tenants
+  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+-- Tenants: Users can only see/update/delete tenants they belong to
 CREATE POLICY "Tenant isolation" ON tenants
-  FOR ALL USING (
+  FOR SELECT USING (
     id IN (SELECT tenant_id FROM tenant_users WHERE user_id = auth.uid())
   );
+
+CREATE POLICY "Tenant owners can update" ON tenants
+  FOR UPDATE USING (is_tenant_owner(id));
+
+CREATE POLICY "Tenant owners can delete" ON tenants
+  FOR DELETE USING (is_tenant_owner(id));
+
+-- Helper function to check if user is tenant owner (bypasses RLS)
+CREATE OR REPLACE FUNCTION is_tenant_owner(p_tenant_id UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM tenant_users 
+    WHERE tenant_id = p_tenant_id AND user_id = auth.uid() AND role = 'owner'
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Tenant Users: Users can see their own memberships
 CREATE POLICY "View own tenant memberships" ON tenant_users
   FOR SELECT USING (user_id = auth.uid());
 
+-- Allow users to create their own membership as owner (for new tenants)
+CREATE POLICY "Users can join as owner" ON tenant_users
+  FOR INSERT WITH CHECK (user_id = auth.uid() AND role = 'owner');
+
+-- Owners can manage tenant users (update/delete)
 CREATE POLICY "Owners can manage tenant users" ON tenant_users
-  FOR ALL USING (
-    tenant_id IN (
-      SELECT tenant_id FROM tenant_users 
-      WHERE user_id = auth.uid() AND role = 'owner'
-    )
-  );
+  FOR UPDATE USING (is_tenant_owner(tenant_id));
+
+CREATE POLICY "Owners can delete tenant users" ON tenant_users
+  FOR DELETE USING (is_tenant_owner(tenant_id));
 
 -- Helper function to check tenant access
 CREATE OR REPLACE FUNCTION user_has_tenant_access(p_tenant_id UUID)
@@ -200,6 +255,29 @@ BEGIN
     SELECT 1 FROM tenant_users 
     WHERE tenant_id = p_tenant_id AND user_id = auth.uid()
   );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Function to create tenant with owner (bypasses RLS race condition)
+CREATE OR REPLACE FUNCTION create_tenant_with_owner(
+  p_name TEXT,
+  p_type tenant_type,
+  p_currency TEXT DEFAULT 'USD'
+)
+RETURNS tenants AS $$
+DECLARE
+  new_tenant tenants%ROWTYPE;
+BEGIN
+  -- Create tenant
+  INSERT INTO tenants (name, type, currency)
+  VALUES (p_name, p_type, p_currency)
+  RETURNING * INTO new_tenant;
+  
+  -- Link user to tenant as owner
+  INSERT INTO tenant_users (tenant_id, user_id, role)
+  VALUES (new_tenant.id, auth.uid(), 'owner');
+  
+  RETURN new_tenant;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -213,6 +291,10 @@ CREATE POLICY "Tenant isolation" ON categories
 
 -- Contacts: Tenant isolation
 CREATE POLICY "Tenant isolation" ON contacts
+  FOR ALL USING (user_has_tenant_access(tenant_id));
+
+-- Items: Tenant isolation
+CREATE POLICY "Tenant isolation" ON items
   FOR ALL USING (user_has_tenant_access(tenant_id));
 
 -- Bills: Tenant isolation
@@ -231,6 +313,14 @@ CREATE POLICY "Access through invoice" ON invoice_lines
     )
   );
 
+-- Bill Lines: Access through bill
+CREATE POLICY "Access through bill" ON bill_lines
+  FOR ALL USING (
+    bill_id IN (
+      SELECT id FROM bills WHERE user_has_tenant_access(tenant_id)
+    )
+  );
+
 -- Transactions: Tenant isolation
 CREATE POLICY "Tenant isolation" ON transactions
   FOR ALL USING (user_has_tenant_access(tenant_id));
@@ -241,44 +331,20 @@ CREATE POLICY "Tenant isolation" ON transactions
 
 -- Function to handle new user signup
 CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER AS $$
-DECLARE
-  new_tenant_id UUID;
+RETURNS TRIGGER 
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
-  -- Create profile
-  INSERT INTO profiles (id, email, full_name)
-  VALUES (NEW.id, NEW.email, NEW.raw_user_meta_data->>'full_name');
-  
-  -- Create default "Personal" tenant
-  INSERT INTO tenants (name, type, currency)
-  VALUES ('Personal', 'personal', 'USD')
-  RETURNING id INTO new_tenant_id;
-  
-  -- Link user to tenant as owner
-  INSERT INTO tenant_users (tenant_id, user_id, role)
-  VALUES (new_tenant_id, NEW.id, 'owner');
-  
-  -- Seed default categories for personal tenant
-  INSERT INTO categories (tenant_id, name, type) VALUES
-    (new_tenant_id, 'Salary', 'income'),
-    (new_tenant_id, 'Freelance', 'income'),
-    (new_tenant_id, 'Investments', 'income'),
-    (new_tenant_id, 'Other Income', 'income'),
-    (new_tenant_id, 'Food & Dining', 'expense'),
-    (new_tenant_id, 'Transportation', 'expense'),
-    (new_tenant_id, 'Shopping', 'expense'),
-    (new_tenant_id, 'Entertainment', 'expense'),
-    (new_tenant_id, 'Bills & Utilities', 'expense'),
-    (new_tenant_id, 'Healthcare', 'expense'),
-    (new_tenant_id, 'Transfer', 'transfer');
-  
-  -- Create default cash account
-  INSERT INTO accounts (tenant_id, name, type)
-  VALUES (new_tenant_id, 'Cash', 'cash');
-  
+  INSERT INTO public.profiles (id, email, full_name)
+  VALUES (
+    NEW.id, 
+    NEW.email, 
+    COALESCE(NEW.raw_user_meta_data->>'full_name', '')
+  );
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql;
 
 -- Trigger for new user signup
 CREATE TRIGGER on_auth_user_created
@@ -320,6 +386,106 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER update_invoice_total_on_line_change
   AFTER INSERT OR UPDATE OR DELETE ON invoice_lines
   FOR EACH ROW EXECUTE FUNCTION update_invoice_total();
+
+-- Function to update bill total from lines
+CREATE OR REPLACE FUNCTION update_bill_total()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE bills 
+  SET total_amount = (
+    SELECT COALESCE(SUM(total), 0) FROM bill_lines WHERE bill_id = COALESCE(NEW.bill_id, OLD.bill_id)
+  )
+  WHERE id = COALESCE(NEW.bill_id, OLD.bill_id);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER update_bill_total_on_line_change
+  AFTER INSERT OR UPDATE OR DELETE ON bill_lines
+  FOR EACH ROW EXECUTE FUNCTION update_bill_total();
+
+-- Function to update vendor balance when bill is created/updated/deleted
+CREATE OR REPLACE FUNCTION update_vendor_balance_on_bill()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- New bill increases what we owe the vendor
+    IF NEW.vendor_id IS NOT NULL THEN
+      UPDATE contacts SET balance = balance + NEW.total_amount WHERE id = NEW.vendor_id;
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Handle vendor change or amount change
+    IF OLD.vendor_id IS NOT NULL AND OLD.vendor_id != COALESCE(NEW.vendor_id, OLD.vendor_id) THEN
+      -- Vendor changed, remove from old vendor
+      UPDATE contacts SET balance = balance - OLD.total_amount WHERE id = OLD.vendor_id;
+    END IF;
+    IF NEW.vendor_id IS NOT NULL THEN
+      IF OLD.vendor_id = NEW.vendor_id THEN
+        -- Same vendor, adjust by difference
+        UPDATE contacts SET balance = balance + (NEW.total_amount - OLD.total_amount) WHERE id = NEW.vendor_id;
+      ELSE
+        -- New vendor, add full amount
+        UPDATE contacts SET balance = balance + NEW.total_amount WHERE id = NEW.vendor_id;
+      END IF;
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    -- Bill deleted, reduce what we owe
+    IF OLD.vendor_id IS NOT NULL THEN
+      UPDATE contacts SET balance = balance - OLD.total_amount WHERE id = OLD.vendor_id;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER update_vendor_balance_on_bill_change
+  AFTER INSERT OR UPDATE OR DELETE ON bills
+  FOR EACH ROW EXECUTE FUNCTION update_vendor_balance_on_bill();
+
+-- Function to update vendor balance when payment is made (transaction linked to bill)
+CREATE OR REPLACE FUNCTION update_vendor_balance_on_payment()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_vendor_id UUID;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.bill_id IS NOT NULL THEN
+      SELECT vendor_id INTO v_vendor_id FROM bills WHERE id = NEW.bill_id;
+      IF v_vendor_id IS NOT NULL THEN
+        -- Payment reduces what we owe (amount is negative for expenses)
+        UPDATE contacts SET balance = balance + NEW.amount WHERE id = v_vendor_id;
+      END IF;
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- Handle bill_id change
+    IF OLD.bill_id IS NOT NULL THEN
+      SELECT vendor_id INTO v_vendor_id FROM bills WHERE id = OLD.bill_id;
+      IF v_vendor_id IS NOT NULL THEN
+        UPDATE contacts SET balance = balance - OLD.amount WHERE id = v_vendor_id;
+      END IF;
+    END IF;
+    IF NEW.bill_id IS NOT NULL THEN
+      SELECT vendor_id INTO v_vendor_id FROM bills WHERE id = NEW.bill_id;
+      IF v_vendor_id IS NOT NULL THEN
+        UPDATE contacts SET balance = balance + NEW.amount WHERE id = v_vendor_id;
+      END IF;
+    END IF;
+  ELSIF TG_OP = 'DELETE' THEN
+    IF OLD.bill_id IS NOT NULL THEN
+      SELECT vendor_id INTO v_vendor_id FROM bills WHERE id = OLD.bill_id;
+      IF v_vendor_id IS NOT NULL THEN
+        -- Reverse the payment effect
+        UPDATE contacts SET balance = balance - OLD.amount WHERE id = v_vendor_id;
+      END IF;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER update_vendor_balance_on_payment_change
+  AFTER INSERT OR UPDATE OR DELETE ON transactions
+  FOR EACH ROW EXECUTE FUNCTION update_vendor_balance_on_payment();
 
 -- Function to seed categories for new tenants based on type
 CREATE OR REPLACE FUNCTION seed_tenant_categories(p_tenant_id UUID, p_type tenant_type)
@@ -374,13 +540,13 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply updated_at triggers
-CREATE TRIGGER set_updated_at ON profiles BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON tenants BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON accounts BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON contacts BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON bills BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON invoices BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-CREATE TRIGGER set_updated_at ON transactions BEFORE UPDATE FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_profiles BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_tenants BEFORE UPDATE ON tenants FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_accounts BEFORE UPDATE ON accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_contacts BEFORE UPDATE ON contacts FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_bills BEFORE UPDATE ON bills FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_invoices BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER set_updated_at_transactions BEFORE UPDATE ON transactions FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================
 -- INDEXES
@@ -398,4 +564,8 @@ CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_transactions_tenant ON transactions(tenant_id);
 CREATE INDEX idx_transactions_date ON transactions(date);
 CREATE INDEX idx_transactions_account ON transactions(account_id);
+CREATE INDEX idx_bill_lines_bill ON bill_lines(bill_id);
+CREATE INDEX idx_invoice_lines_invoice ON invoice_lines(invoice_id);
+CREATE INDEX idx_items_tenant ON items(tenant_id);
+CREATE INDEX idx_items_name ON items(tenant_id, name);
 

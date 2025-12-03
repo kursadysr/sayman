@@ -108,14 +108,13 @@ export function RecordPaymentDialog({
     const paymentAmount = parseFloat(values.amount);
 
     try {
-      // Create transaction (expense)
+      // Create payment transaction (cash outflow)
       const { error: txError } = await supabase.from('transactions').insert({
         tenant_id: tenant.id,
         account_id: values.account_id,
-        category_id: bill.category_id,
         date: values.date,
-        amount: -paymentAmount, // Negative for expense
-        description: `Payment for bill: ${bill.description || bill.bill_number || 'Bill'}`,
+        amount: -paymentAmount, // Negative for expense/payment
+        description: `Payment: ${bill.description || bill.bill_number || 'Bill'}`,
         status: 'cleared',
         bill_id: bill.id,
       });

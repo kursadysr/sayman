@@ -1,60 +1,76 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Filter, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ArrowUpCircle, ArrowDownCircle, Receipt } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
-import { AddTransactionDrawer } from '@/features/transactions/add-transaction-drawer';
-import type { Transaction } from '@/lib/supabase/types';
+
+interface LedgerEntry {
+  id: string;
+  date: string;
+  type: 'bill_payment' | 'invoice_payment' | 'adjustment';
+  description: string;
+  amount: number;
+  accountName?: string;
+  contactName?: string;
+  reference?: string;
+}
 
 export default function TransactionsPage() {
   const { tenant } = useTenant();
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerType, setDrawerType] = useState<'expense' | 'income'>('expense');
   const [filter, setFilter] = useState<'all' | 'income' | 'expense'>('all');
 
-  const loadTransactions = useCallback(async () => {
+  const loadLedger = useCallback(async () => {
     if (!tenant) return;
 
     setLoading(true);
     const supabase = createClient();
 
-    const { data } = await supabase
+    const { data: transactions } = await supabase
       .from('transactions')
-      .select('*, account:accounts(*), category:categories(*)')
+      .select(`
+        *,
+        account:accounts(name),
+        bill:bills(bill_number, vendor:contacts(name))
+      `)
       .eq('tenant_id', tenant.id)
       .order('date', { ascending: false });
 
-    setTransactions((data || []) as Transaction[]);
+    const ledgerEntries: LedgerEntry[] = (transactions || []).map((tx: any) => ({
+      id: tx.id,
+      date: tx.date,
+      type: tx.bill_id ? 'bill_payment' : tx.amount > 0 ? 'invoice_payment' : 'adjustment',
+      description: tx.description || (tx.bill?.vendor?.name ? `Payment to ${tx.bill.vendor.name}` : 'Transaction'),
+      amount: tx.amount,
+      accountName: tx.account?.name,
+      contactName: tx.bill?.vendor?.name,
+      reference: tx.bill?.bill_number,
+    }));
+
+    setEntries(ledgerEntries);
     setLoading(false);
   }, [tenant]);
 
   useEffect(() => {
-    loadTransactions();
-  }, [loadTransactions]);
+    loadLedger();
+  }, [loadLedger]);
 
-  const filteredTransactions = transactions.filter((tx) => {
+  const filteredEntries = entries.filter((entry) => {
     if (filter === 'all') return true;
-    if (filter === 'income') return tx.amount > 0;
-    if (filter === 'expense') return tx.amount < 0;
+    if (filter === 'income') return entry.amount > 0;
+    if (filter === 'expense') return entry.amount < 0;
     return true;
   });
 
-  const handleAddExpense = () => {
-    setDrawerType('expense');
-    setDrawerOpen(true);
-  };
-
-  const handleAddIncome = () => {
-    setDrawerType('income');
-    setDrawerOpen(true);
+  const totals = {
+    income: entries.filter(e => e.amount > 0).reduce((sum, e) => sum + e.amount, 0),
+    expense: entries.filter(e => e.amount < 0).reduce((sum, e) => sum + Math.abs(e.amount), 0),
   };
 
   if (!tenant) {
@@ -67,112 +83,98 @@ export default function TransactionsPage() {
 
   return (
     <div className="p-4 lg:p-8 pb-24 lg:pb-8">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Transactions</h1>
-          <p className="text-slate-400">Track your income and expenses</p>
-        </div>
-        <div className="hidden lg:flex gap-2">
-          <Button
-            onClick={handleAddIncome}
-            variant="outline"
-            className="border-green-500 text-green-400 hover:bg-green-500/10"
-          >
-            <ArrowUpCircle className="mr-2 h-4 w-4" />
-            Add Income
-          </Button>
-          <Button
-            onClick={handleAddExpense}
-            className="bg-emerald-500 hover:bg-emerald-600 text-white"
-          >
-            <ArrowDownCircle className="mr-2 h-4 w-4" />
-            Add Expense
-          </Button>
-        </div>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-white">Cash Ledger</h1>
+        <p className="text-slate-400">All cash movements from bill payments and income</p>
       </div>
 
-      {/* Mobile Add Buttons */}
-      <div className="flex gap-2 mb-6 lg:hidden">
-        <Button
-          onClick={handleAddIncome}
-          variant="outline"
-          className="flex-1 border-green-500 text-green-400"
-        >
-          <ArrowUpCircle className="mr-2 h-4 w-4" />
-          Income
-        </Button>
-        <Button
-          onClick={handleAddExpense}
-          className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
-        >
-          <ArrowDownCircle className="mr-2 h-4 w-4" />
-          Expense
-        </Button>
+      <div className="grid grid-cols-2 gap-4 mb-6">
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
+              <ArrowUpCircle className="h-4 w-4 text-green-400" />
+              Total Received
+            </div>
+            <div className="text-xl font-bold text-green-400">
+              {formatCurrency(totals.income, tenant.currency)}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 text-slate-400 text-sm mb-1">
+              <ArrowDownCircle className="h-4 w-4 text-red-400" />
+              Total Paid
+            </div>
+            <div className="text-xl font-bold text-red-400">
+              {formatCurrency(totals.expense, tenant.currency)}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Filter Tabs */}
       <Tabs value={filter} onValueChange={(v) => setFilter(v as 'all' | 'income' | 'expense')} className="mb-6">
         <TabsList className="bg-slate-800 border border-slate-700">
           <TabsTrigger value="all" className="data-[state=active]:bg-slate-700">
             All
           </TabsTrigger>
           <TabsTrigger value="income" className="data-[state=active]:bg-slate-700">
-            Income
+            Received
           </TabsTrigger>
           <TabsTrigger value="expense" className="data-[state=active]:bg-slate-700">
-            Expenses
+            Paid
           </TabsTrigger>
         </TabsList>
       </Tabs>
 
-      {/* Transactions List */}
       <Card className="bg-slate-800/50 border-slate-700">
         <CardContent className="p-0">
           {loading ? (
             <div className="p-8 text-center text-slate-400">Loading...</div>
-          ) : filteredTransactions.length === 0 ? (
+          ) : filteredEntries.length === 0 ? (
             <div className="p-8 text-center text-slate-400">
-              <p>No transactions found.</p>
-              <Button
-                onClick={handleAddExpense}
-                className="mt-4 bg-emerald-500 hover:bg-emerald-600 text-white"
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add Your First Transaction
-              </Button>
+              <Receipt className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p>No transactions yet.</p>
+              <p className="text-sm mt-2">
+                Transactions appear here when you record bill payments.
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-slate-700">
-              {filteredTransactions.map((tx) => (
+              {filteredEntries.map((entry) => (
                 <div
-                  key={tx.id}
+                  key={entry.id}
                   className="flex items-center justify-between p-4 hover:bg-slate-700/30 transition-colors"
                 >
                   <div className="flex items-center gap-4">
                     <div
                       className={`p-2 rounded-full ${
-                        tx.amount >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'
+                        entry.amount >= 0 ? 'bg-green-500/10' : 'bg-cyan-500/10'
                       }`}
                     >
-                      {tx.amount >= 0 ? (
+                      {entry.amount >= 0 ? (
                         <ArrowUpCircle className="h-5 w-5 text-green-400" />
                       ) : (
-                        <ArrowDownCircle className="h-5 w-5 text-red-400" />
+                        <Receipt className="h-5 w-5 text-cyan-400" />
                       )}
                     </div>
                     <div>
                       <p className="font-medium text-white">
-                        {tx.description || tx.category?.name || 'Transaction'}
+                        {entry.description}
                       </p>
                       <div className="flex items-center gap-2 text-sm text-slate-400">
-                        <span>{formatDate(tx.date)}</span>
-                        <span>•</span>
-                        <span>{tx.account?.name}</span>
-                        {tx.category && (
+                        <span>{formatDate(entry.date)}</span>
+                        {entry.accountName && (
                           <>
                             <span>•</span>
-                            <Badge variant="secondary" className="bg-slate-700 text-slate-300">
-                              {tx.category.name}
+                            <span>{entry.accountName}</span>
+                          </>
+                        )}
+                        {entry.reference && (
+                          <>
+                            <span>•</span>
+                            <Badge variant="secondary" className="bg-slate-700 text-slate-300 text-xs">
+                              {entry.reference}
                             </Badge>
                           </>
                         )}
@@ -181,11 +183,11 @@ export default function TransactionsPage() {
                   </div>
                   <div
                     className={`text-lg font-bold ${
-                      tx.amount >= 0 ? 'text-green-400' : 'text-red-400'
+                      entry.amount >= 0 ? 'text-green-400' : 'text-cyan-400'
                     }`}
                   >
-                    {tx.amount >= 0 ? '+' : ''}
-                    {formatCurrency(tx.amount, tenant.currency)}
+                    {entry.amount >= 0 ? '+' : ''}
+                    {formatCurrency(entry.amount, tenant.currency)}
                   </div>
                 </div>
               ))}
@@ -194,14 +196,9 @@ export default function TransactionsPage() {
         </CardContent>
       </Card>
 
-      {/* Add Transaction Drawer */}
-      <AddTransactionDrawer
-        open={drawerOpen}
-        onOpenChange={setDrawerOpen}
-        onSuccess={loadTransactions}
-        type={drawerType}
-      />
+      <p className="text-center text-slate-500 text-sm mt-4">
+        To add expenses, go to Bills. To add income, go to Invoices.
+      </p>
     </div>
   );
 }
-

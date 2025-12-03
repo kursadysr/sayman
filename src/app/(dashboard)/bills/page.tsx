@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Receipt, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { Plus, Receipt, Clock, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -10,6 +10,8 @@ import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { RecordPaymentDialog } from '@/features/bills/record-payment-dialog';
+import { AddBillDrawer } from '@/features/bills/add-bill-drawer';
+import { EditBillDrawer } from '@/features/bills/edit-bill-drawer';
 import type { Bill } from '@/lib/supabase/types';
 
 const statusConfig = {
@@ -26,6 +28,8 @@ export default function BillsPage() {
   const [filter, setFilter] = useState<'all' | 'unpaid' | 'partial' | 'paid'>('all');
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [addBillDrawerOpen, setAddBillDrawerOpen] = useState(false);
+  const [editBillDrawerOpen, setEditBillDrawerOpen] = useState(false);
 
   const loadBills = useCallback(async () => {
     if (!tenant) return;
@@ -36,7 +40,7 @@ export default function BillsPage() {
     // Get bills with vendor info
     const { data: billsData } = await supabase
       .from('bills')
-      .select('*, vendor:contacts(*), category:categories(*)')
+      .select('*, vendor:contacts(*)')
       .eq('tenant_id', tenant.id)
       .order('due_date', { ascending: true });
 
@@ -77,6 +81,11 @@ export default function BillsPage() {
     setPaymentDialogOpen(true);
   };
 
+  const handleEditBill = (bill: Bill) => {
+    setSelectedBill(bill);
+    setEditBillDrawerOpen(true);
+  };
+
   if (!tenant) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -92,6 +101,13 @@ export default function BillsPage() {
           <h1 className="text-2xl font-bold text-white">Bills</h1>
           <p className="text-slate-400">Manage your accounts payable</p>
         </div>
+        <Button
+          onClick={() => setAddBillDrawerOpen(true)}
+          className="bg-emerald-500 hover:bg-emerald-600 text-white"
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          Add Bill
+        </Button>
       </div>
 
       {/* Filter Tabs */}
@@ -122,7 +138,7 @@ export default function BillsPage() {
               <Receipt className="h-12 w-12 mx-auto mb-4 text-slate-600" />
               <p>No bills found.</p>
               <p className="text-sm mt-2">
-                Bills are created when you add an expense with &quot;Paid Now&quot; turned off.
+                Click &quot;Add Bill&quot; to record your first expense.
               </p>
             </div>
           ) : (
@@ -142,8 +158,13 @@ export default function BillsPage() {
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <p className="font-medium text-white">
-                            {bill.vendor?.name || bill.description || 'Bill'}
+                            {bill.vendor?.name || bill.description || 'Quick Expense'}
                           </p>
+                          {!bill.vendor && (
+                            <Badge className="bg-slate-500/10 text-slate-400 border-slate-500/20 border text-xs">
+                              No Vendor
+                            </Badge>
+                          )}
                           <Badge className={`${status.color} border`}>
                             <StatusIcon className="h-3 w-3 mr-1" />
                             {status.label}
@@ -155,14 +176,6 @@ export default function BillsPage() {
                             <>
                               <span>•</span>
                               <span>Due: {formatDate(bill.due_date)}</span>
-                            </>
-                          )}
-                          {bill.category && (
-                            <>
-                              <span>•</span>
-                              <Badge variant="secondary" className="bg-slate-700 text-slate-300">
-                                {bill.category.name}
-                              </Badge>
                             </>
                           )}
                         </div>
@@ -179,8 +192,17 @@ export default function BillsPage() {
                       </div>
                     </div>
                     
-                    {bill.status !== 'paid' && (
-                      <div className="flex justify-end mt-3">
+                    <div className="flex justify-end gap-2 mt-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleEditBill(bill)}
+                        className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                      >
+                        <Pencil className="h-3 w-3 mr-1" />
+                        Edit
+                      </Button>
+                      {bill.status !== 'paid' && (
                         <Button
                           size="sm"
                           onClick={() => handleRecordPayment(bill)}
@@ -188,8 +210,8 @@ export default function BillsPage() {
                         >
                           Record Payment
                         </Button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -205,6 +227,21 @@ export default function BillsPage() {
         onOpenChange={setPaymentDialogOpen}
         onSuccess={loadBills}
         paidAmount={selectedBill ? payments[selectedBill.id] || 0 : 0}
+      />
+
+      {/* Add Bill Drawer */}
+      <AddBillDrawer
+        open={addBillDrawerOpen}
+        onOpenChange={setAddBillDrawerOpen}
+        onSuccess={loadBills}
+      />
+
+      {/* Edit Bill Drawer */}
+      <EditBillDrawer
+        bill={selectedBill}
+        open={editBillDrawerOpen}
+        onOpenChange={setEditBillDrawerOpen}
+        onSuccess={loadBills}
       />
     </div>
   );

@@ -65,6 +65,16 @@ export interface Category {
   created_at: string;
 }
 
+export interface Item {
+  id: string;
+  tenant_id: string;
+  vendor_id: string;
+  name: string;
+  last_unit_price: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Contact {
   id: string;
   tenant_id: string;
@@ -74,6 +84,7 @@ export interface Contact {
   phone: string | null;
   tax_id: string | null;
   address: string | null;
+  balance: number;
   created_at: string;
   updated_at: string;
 }
@@ -88,12 +99,25 @@ export interface Bill {
   due_date: string | null;
   total_amount: number;
   description: string | null;
-  category_id: string | null;
   attachment_url: string | null;
   created_at: string;
   updated_at: string;
   vendor?: Contact;
-  category?: Category;
+  lines?: BillLine[];
+}
+
+export interface BillLine {
+  id: string;
+  bill_id: string;
+  item_id: string | null;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  tax_rate: number;
+  total: number;
+  sort_order: number;
+  created_at: string;
+  item?: Item;
 }
 
 export interface Invoice {
@@ -173,13 +197,19 @@ export interface CreateContactInput {
 }
 
 export interface CreateBillInput {
-  vendor_id?: string;
+  vendor_id: string;
   bill_number?: string;
   issue_date: string;
   due_date?: string;
-  total_amount: number;
+  total_amount?: number;
   description?: string;
-  category_id?: string;
+}
+
+export interface CreateBillLineInput {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  tax_rate?: number;
 }
 
 export interface CreateInvoiceInput {

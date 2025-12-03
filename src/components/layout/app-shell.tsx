@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu,
   Plus,
+  Package,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,7 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Transactions', href: '/transactions', icon: ArrowLeftRight },
   { name: 'Bills', href: '/bills', icon: Receipt },
+  { name: 'Items', href: '/items', icon: Package },
   { name: 'Invoices', href: '/invoices', icon: FileText },
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Settings', href: '/settings', icon: Settings },
@@ -68,6 +70,10 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
         if (!tenant && loadedTenants.length > 0) {
           setCurrentTenant(loadedTenants[0]);
         }
+      } else {
+        // Clear any stale tenant data for users with no tenants
+        setTenants([]);
+        setCurrentTenant(null);
       }
     };
 
