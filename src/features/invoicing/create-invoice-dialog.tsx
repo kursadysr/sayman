@@ -5,7 +5,7 @@ import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { format } from 'date-fns';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -32,9 +32,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import type { Contact, InvoiceLayout } from '@/lib/supabase/types';
+import type { Contact, Account } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
 const lineSchema = z.object({
@@ -46,6 +47,7 @@ const lineSchema = z.object({
 
 const formSchema = z.object({
   customer_id: z.string().optional(),
+  account_id: z.string().optional(),
   invoice_number: z.string().optional(),
   layout_type: z.enum(['service', 'product']),
   issue_date: z.string(),
@@ -69,12 +71,15 @@ export function CreateInvoiceDialog({
 }: CreateInvoiceDialogProps) {
   const { tenant } = useTenant();
   const [customers, setCustomers] = useState<Contact[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(false);
+  const [markAsPaid, setMarkAsPaid] = useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       customer_id: '',
+      account_id: '',
       invoice_number: '',
       layout_type: 'product',
       issue_date: format(new Date(), 'yyyy-MM-dd'),
@@ -103,22 +108,43 @@ export function CreateInvoiceDialog({
   useEffect(() => {
     if (!tenant || !open) return;
 
-    const loadCustomers = async () => {
+    const loadData = async () => {
       const supabase = createClient();
-      const { data } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .eq('type', 'customer');
       
-      setCustomers((data || []) as Contact[]);
+      const [customersRes, accountsRes] = await Promise.all([
+        supabase
+          .from('contacts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .eq('type', 'customer'),
+        supabase
+          .from('accounts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .order('name'),
+      ]);
+      
+      setCustomers((customersRes.data || []) as Contact[]);
+      setAccounts((accountsRes.data || []) as Account[]);
     };
 
-    loadCustomers();
+    loadData();
   }, [tenant, open]);
 
   const onSubmit = async (values: FormValues) => {
     if (!tenant) return;
+
+    const total = calculateTotal();
+    if (total <= 0) {
+      toast.error('Total must be greater than 0');
+      return;
+    }
+
+    // If paid, account is required
+    if (markAsPaid && !values.account_id) {
+      toast.error('Please select an account');
+      return;
+    }
 
     setLoading(true);
     const supabase = createClient();
@@ -135,7 +161,7 @@ export function CreateInvoiceDialog({
           issue_date: values.issue_date,
           due_date: values.due_date || null,
           notes: values.notes || null,
-          status: 'draft',
+          status: markAsPaid ? 'paid' : 'draft',
         })
         .select()
         .single();
@@ -159,8 +185,25 @@ export function CreateInvoiceDialog({
 
       if (linesError) throw linesError;
 
-      toast.success('Invoice created successfully');
+      // If paid, create payment transaction (positive amount = income)
+      if (markAsPaid && values.account_id) {
+        const { error: txError } = await supabase
+          .from('transactions')
+          .insert({
+            tenant_id: tenant.id,
+            account_id: values.account_id,
+            date: values.issue_date,
+            amount: total, // Positive for income
+            description: `Invoice ${values.invoice_number || invoice.id.slice(0, 8)}`,
+            status: 'cleared',
+          });
+
+        if (txError) throw txError;
+      }
+
+      toast.success(markAsPaid ? 'Invoice paid & saved' : 'Invoice created');
       form.reset();
+      setMarkAsPaid(false);
       onOpenChange(false);
       onSuccess?.();
     } catch (error) {
@@ -171,8 +214,14 @@ export function CreateInvoiceDialog({
     }
   };
 
+  const handleClose = () => {
+    form.reset();
+    setMarkAsPaid(false);
+    onOpenChange(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create Invoice</DialogTitle>
@@ -228,6 +277,52 @@ export function CreateInvoiceDialog({
               />
             </div>
 
+            {/* Paid toggle */}
+            <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded-lg">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-4 w-4 text-slate-400" />
+                <Label className="text-slate-300">Paid</Label>
+              </div>
+              <Switch
+                checked={markAsPaid}
+                onCheckedChange={setMarkAsPaid}
+              />
+            </div>
+
+            {/* Account Selection - Show when paying now */}
+            {markAsPaid && (
+              <FormField
+                control={form.control}
+                name="account_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-slate-300">Receive To *</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ''}>
+                      <FormControl>
+                        <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
+                          <SelectValue placeholder="Select account" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent className="bg-slate-800 border-slate-700">
+                        {accounts.length === 0 ? (
+                          <div className="p-2 text-sm text-slate-400">
+                            No accounts found. Add one in Accounts first.
+                          </div>
+                        ) : (
+                          accounts.map((account) => (
+                            <SelectItem key={account.id} value={account.id} className="text-white">
+                              {account.name}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}
@@ -247,23 +342,26 @@ export function CreateInvoiceDialog({
                 )}
               />
 
-              <FormField
-                control={form.control}
-                name="due_date"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-slate-300">Due Date</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="date"
-                        {...field}
-                        className="bg-slate-700/50 border-slate-600 text-white"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {/* Due Date - Only show when not paid */}
+              {!markAsPaid && (
+                <FormField
+                  control={form.control}
+                  name="due_date"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-slate-300">Due Date</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="date"
+                          {...field}
+                          className="bg-slate-700/50 border-slate-600 text-white"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </div>
 
             {/* Layout Type Toggle */}
@@ -379,7 +477,7 @@ export function CreateInvoiceDialog({
             {/* Total */}
             <div className="flex justify-end p-4 bg-slate-700/30 rounded-lg">
               <div className="text-right">
-                <p className="text-sm text-slate-400">Estimated Total</p>
+                <p className="text-sm text-slate-400">Total</p>
                 <p className="text-2xl font-bold text-emerald-400">
                   {new Intl.NumberFormat('en-US', {
                     style: 'currency',
@@ -411,7 +509,7 @@ export function CreateInvoiceDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={handleClose}
                 className="border-slate-600 text-slate-300"
               >
                 Cancel
@@ -421,7 +519,7 @@ export function CreateInvoiceDialog({
                 disabled={loading}
                 className="bg-emerald-500 hover:bg-emerald-600 text-white"
               >
-                {loading ? 'Creating...' : 'Create Invoice'}
+                {loading ? 'Saving...' : markAsPaid ? 'Receive & Save' : 'Create Invoice'}
               </Button>
             </DialogFooter>
           </form>
@@ -430,4 +528,3 @@ export function CreateInvoiceDialog({
     </Dialog>
   );
 }
-

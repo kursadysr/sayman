@@ -1,36 +1,63 @@
 # Sayman - Multi-Tenant Finance & Bookkeeping App
 
-A mobile-first SaaS application for managing personal finances and business bookkeeping with multi-tenant support.
+A mobile-first SaaS application for managing personal finances and business bookkeeping with proper accrual-basis accounting.
 
 ## Features
 
-- **Multi-Tenant Architecture** - Manage multiple organizations (Personal, Retail, Service) with a single login
-- **Tenant Switching** - Seamlessly switch between workspaces
-- **Transactions** - Track income and expenses with category support
-- **Bills (Accounts Payable)** - Create bills and record partial payments
-- **Invoicing** - Create professional invoices with PDF generation
-- **Contacts** - Manage vendors and customers
-- **Dashboard** - Overview of finances with summary cards
+### Core
+- **Multi-Tenant Architecture** - Manage multiple workspaces (Personal, Retail, Service)
+- **Tenant Switching** - Seamlessly switch between organizations
+
+### Expenses (Bills)
+- **Itemized Entry** - Always enter items with qty, price, tax
+- **Vendor Optional** - Quick expenses without vendor, or track by vendor
+- **Pay Now or Later** - Toggle to pay immediately or create accounts payable
+- **Item Price Tracking** - Auto-suggest items with last known prices per vendor
+
+### Income (Invoices)
+- **Customer Invoicing** - Create professional invoices
+- **PDF Generation** - Download branded PDF invoices
+- **Pay Now or Later** - Toggle to receive payment immediately or track AR
+
+### Contacts
+- **Vendors & Customers** - Manage all business contacts
+- **Balance Tracking** - See what you owe each vendor
+- **Transaction History** - View all bills and payments per contact
+
+### Items
+- **Price History** - Track item prices over time per vendor
+- **Auto-Complete** - Suggestions when entering bills
+- **Edit & Manage** - Rename items, view purchase history
+
+### Cash Ledger
+- **Read-Only View** - All cash movements from bill/invoice payments
+- **Totals** - See total received vs paid
+
+### Dashboard
+- **Cash Balance** - Total in all accounts
+- **Accounts Payable** - What you owe vendors
+- **Monthly Expenses** - Bills this month (accrual)
+- **Monthly Payments** - Cash paid out
 
 ## Tech Stack
 
-- **Frontend:** Next.js 16 (App Router), TypeScript, Tailwind CSS, Shadcn/UI
-- **Backend:** Supabase (PostgreSQL, Auth, Storage)
-- **State Management:** Zustand (global UI state), TanStack Query (server state)
+- **Frontend:** Next.js 15 (App Router), TypeScript, Tailwind CSS, Shadcn/UI
+- **Backend:** Supabase (PostgreSQL, Auth, Row Level Security)
+- **State:** Zustand (tenant context)
 - **Forms:** React Hook Form + Zod
-- **PDF Generation:** @react-pdf/renderer
+- **PDF:** @react-pdf/renderer
 
 ## Getting Started
 
 ### 1. Setup Supabase
 
-1. Create a new Supabase project at [supabase.com](https://supabase.com)
-2. Go to SQL Editor and run the schema from `supabase/schema.sql`
-3. Copy your project URL and anon key from Settings → API
+1. Create a project at [supabase.com](https://supabase.com)
+2. Run `supabase/schema.sql` in SQL Editor
+3. Copy project URL and anon key from Settings → API
 
 ### 2. Configure Environment
 
-Create a `.env.local` file in the project root:
+Create `.env.local`:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
@@ -51,39 +78,53 @@ Open [http://localhost:3000](http://localhost:3000)
 ```
 /src
   /app
-    /(auth)              # Login, Signup pages
-    /(dashboard)         # Protected dashboard pages
+    /(auth)              # Login, Signup
+    /(dashboard)         # Protected pages
+      /dashboard         # Overview
+      /transactions      # Cash ledger
+      /bills             # Expenses/AP
+      /invoices          # Income/AR
+      /contacts          # Vendors & Customers
+      /items             # Item management
+      /accounts          # Bank accounts
   /components
-    /ui                  # Shadcn UI components
+    /ui                  # Shadcn components
     /layout              # App shell, navigation
     /shared              # TenantSwitcher
   /features
-    /auth                # Auth actions
-    /transactions        # Add transaction drawer
-    /bills               # Bill payment dialog
+    /bills               # Bill drawers & dialogs
+    /invoicing           # Invoice dialog & PDF
     /contacts            # Contact management
-    /invoicing           # Invoice builder, PDF
   /lib
-    /supabase            # Client, server, types
+    /supabase            # Client, types
     /store               # Zustand stores
-    /utils               # Formatters
-  /hooks                 # Custom hooks
 ```
 
-## Database Schema
+## Database Tables
 
-The app uses a multi-tenant database with Row Level Security (RLS):
+| Table | Purpose |
+|-------|---------|
+| profiles | User profiles |
+| tenants | Workspaces |
+| tenant_users | User-tenant roles |
+| accounts | Bank/cash/credit |
+| contacts | Vendors & customers (with balance) |
+| items | Products/services per vendor |
+| bills | Expenses/AP |
+| bill_lines | Bill line items |
+| invoices | Income/AR |
+| invoice_lines | Invoice line items |
+| transactions | Cash flow (payments) |
 
-- **profiles** - User profiles
-- **tenants** - Organizations/workspaces
-- **tenant_users** - User-tenant relationships with roles
-- **accounts** - Bank/cash/credit accounts
-- **categories** - Income/expense categories
-- **contacts** - Vendors and customers
-- **bills** - Accounts payable
-- **invoices** - Accounts receivable
-- **invoice_lines** - Invoice line items
-- **transactions** - Cash flow records
+## Accounting Flow
+
+```
+Bill Created (unpaid)     → Expense recorded, AP increases
+Bill Paid                 → AP decreases, Cash decreases
+
+Invoice Created (unpaid)  → Revenue recorded, AR increases  
+Invoice Paid              → AR decreases, Cash increases
+```
 
 ## License
 

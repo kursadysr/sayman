@@ -1,44 +1,29 @@
-This is the **Final Master Product Requirements Document (PRD)**.
-
-**How to use this with Cursor AI:**
-1.  Create a file named `PLAN.md` in the root of your project.
-2.  Paste the content below into that file.
-3.  In your Cursor Chat, always reference this file (e.g., *"Read @PLAN.md and help me implement the Database Schema"*).
-
-***
-
 # Project Blueprint: Multi-Tenant Finance & Bookkeeping App
 
 ## 1. Executive Summary
-**Project Name:** Sayman
-**Type:** Mobile-First Web Application (SaaS Architecture).
-**Core Goal:** A unified finance platform for a "Super User" who manages distinct entities (Personal Finances, Retail Business, Freelance Agency) via a single login, while supporting "Staff" users with restricted access.
-**Key Differentiator:** Seamlessly blends simple "Expense Tracking" (for personal use) with complex "Accounts Payable/Receivable" (for business use) using a hidden double-entry system.
+**Project Name:** Sayman  
+**Type:** Mobile-First Web Application (SaaS Architecture)  
+**Core Goal:** A unified finance platform for managing distinct entities (Personal Finances, Retail Business, Freelance Agency) via a single login, with proper accrual-basis accounting.  
+**Key Differentiator:** Simple expense entry with proper bookkeeping - tracks item prices, vendor balances, and supports both immediate payments and accounts payable/receivable.
 
 ## 2. Technical Stack
-*   **Frontend:** React (Next.js) + TypeScript (Strict Mode).
-*   **Styling:** Tailwind CSS + **Shadcn/UI** (Mobile-first components).
-*   **Backend:** **Supabase** (PostgreSQL, Auth, Storage, Edge Functions).
-*   **State Management:**
-    *   **Zustand:** Global UI State (specifically for `activeTenantId`).
-    *   **TanStack Query:** Server state and caching.
-*   **Forms:** React Hook Form + Zod.
-*   **PDF Generation:** `@react-pdf/renderer` (Client-side).
-*   **Dates:** `date-fns`.
+- **Frontend:** Next.js (App Router) + TypeScript
+- **Styling:** Tailwind CSS + Shadcn/UI (Mobile-first)
+- **Backend:** Supabase (PostgreSQL, Auth, Storage)
+- **State Management:** Zustand (global UI state)
+- **Forms:** React Hook Form + Zod
+- **PDF Generation:** @react-pdf/renderer (Client-side)
 
 ---
 
-## 3. Architecture: The Tenant System (SaaS Ready)
-**Critically Important:** The application is built on a "Multi-Tenant" architecture. Data isolation is enforced by Row Level Security (RLS).
+## 3. Architecture: The Tenant System
 
-### A. The "Active Tenant" Logic
-*   **Global Context:** The app must always know which "Context" the user is in (e.g., "Personal" vs "Pizzeria").
-*   **State:** A Zustand store (`useTenantStore`) holds the `currentTenant` object. This persists to `localStorage`.
-*   **UI:** A "Tenant Switcher" component in the top navigation allows switching. It lists only tenants present in the `tenant_users` table for the current user.
+### A. Multi-Tenant Design
+- Each user can have multiple workspaces (tenants)
+- Data isolation via Row Level Security (RLS)
+- Tenant switcher in navigation for context switching
 
-### B. Security Rules (RLS)
-Every table (except `profiles`) has a `tenant_id` column.
-**The SQL Policy:**
+### B. Security (RLS Policy)
 ```sql
 CREATE POLICY "Tenant Isolation" ON [table_name]
 USING (
@@ -48,152 +33,143 @@ USING (
 );
 ```
 
-### C. Onboarding & Creation
-*   **Sign Up:** Triggers a database function to create a default "Personal Workspace" tenant.
-*   **Add Organization:** A "Create Tenant" modal allows the user to spin up a new entity.
-    *   **Input:** Name, Type (Personal/Retail/Service), Currency.
-    *   **Action:** Creates `tenant`, links user as `owner`, seeds default `categories` based on Type.
+### C. User Onboarding
+- Sign up creates user profile only (no automatic tenant)
+- User creates their first workspace manually
+- Supports multiple workspace types: Personal, Retail, Service
 
 ---
 
 ## 4. Database Schema
-*Use this exact structure for Supabase.*
 
 ### Identity & Access
-1.  **`profiles`**: `id` (uuid, PK), `email`, `full_name`, `avatar_url`.
-2.  **`tenants`**:
-    *   `id` (uuid, PK)
-    *   `name` (text)
-    *   `type` (enum: 'personal', 'retail', 'service')
-    *   `currency` (text)
-    *   `logo_url` (text)
-    *   `address_details` (jsonb: { address, tax_id, footer_note })
-3.  **`tenant_users`**:
-    *   `tenant_id` (fk), `user_id` (fk)
-    *   `role` (enum: 'owner', 'manager', 'viewer')
+1. **`profiles`**: `id`, `email`, `full_name`, `avatar_url`
+2. **`tenants`**: `id`, `name`, `type`, `currency`, `logo_url`, `address_details`
+3. **`tenant_users`**: `tenant_id`, `user_id`, `role` (owner/manager/viewer)
 
-### The Ledger (Mini-ERP)
-4.  **`accounts`**:
-    *   `id`, `tenant_id`
-    *   `name` (e.g., "Chase Checking")
-    *   `type` (enum: 'bank', 'cash', 'credit')
-    *   `balance` (numeric, default 0)
-5.  **`categories`**:
-    *   `id`, `tenant_id`
-    *   `name` (e.g., "Flour", "Servers")
-    *   `type` (enum: 'income', 'expense', 'transfer', 'cogs')
-6.  **`contacts`** (Vendors & Customers):
-    *   `id`, `tenant_id`
-    *   `type` (enum: 'vendor', 'customer')
-    *   `name` (Company Name)
-    *   `email`, `phone`, `tax_id`, `address`
+### The Ledger
+4. **`accounts`**: Bank/cash/credit accounts with balances
+5. **`contacts`**: Vendors & customers with `balance` tracking
+6. **`items`**: Products/services per vendor with `last_unit_price`
 
-### Documents & Transactions
-7.  **`bills`** (Accounts Payable - Expenses):
-    *   `id`, `tenant_id`
-    *   `vendor_id` (fk -> contacts)
-    *   `bill_number` (text)
-    *   `status` (enum: 'unpaid', 'partial', 'paid')
-    *   `due_date`, `issue_date`
-    *   `total_amount`
-    *   `attachment_url` (Supabase Storage)
-8.  **`invoices`** (Accounts Receivable - Income):
-    *   `id`, `tenant_id`
-    *   `customer_id` (fk -> contacts)
-    *   `invoice_number` (text)
-    *   `status` (enum: 'draft', 'sent', 'partial', 'paid')
-    *   `due_date`, `issue_date`
-    *   `total_amount`
-    *   `layout_type` (enum: 'service', 'product')
-9.  **`invoice_lines`**:
-    *   `id`, `invoice_id`
-    *   `description`, `quantity`, `unit_price`, `tax_rate`, `total`
-10. **`transactions`** (Actual Cash Flow):
-    *   `id`, `tenant_id`, `account_id`, `category_id`
-    *   `date`, `amount` (Signed: - for expense, + for income)
-    *   `description`
-    *   `status` (enum: 'cleared', 'pending')
-    *   `bill_id` (fk, nullable) -> Links payment to a Bill
-    *   `invoice_id` (fk, nullable) -> Links payment to an Invoice
+### Documents
+7. **`bills`**: Expenses/Accounts Payable
+   - `vendor_id` (optional - null for quick expenses)
+   - `status`: unpaid, partial, paid
+   - Always uses line items for itemized tracking
+
+8. **`bill_lines`**: Itemized bill entries
+   - `item_id` links to items table for price tracking
+   - `quantity`, `unit_price`, `tax_rate`, `total`
+
+9. **`invoices`**: Income/Accounts Receivable
+   - `customer_id`, `status`, `layout_type`
+
+10. **`invoice_lines`**: Invoice line items
+
+11. **`transactions`**: Cash flow records (payments only)
+    - Links to `bill_id` or `invoice_id` when paying documents
+    - Positive = income, Negative = expense
 
 ---
 
 ## 5. Key Feature Workflows
 
-### A. The "Add" Experience (Mobile)
-**Goal:** A single "Add" button handles immediate expenses AND future bills.
-1.  User opens **Add Drawer**.
-2.  Fills: Amount ($500), Payee (Roma Foods), Category (Inventory).
-3.  **The Toggle: "Paid Now?"**
-    *   **Case 1: YES (Direct Expense)**
-        *   User selects `Account` (Cash).
-        *   *Result:* Insert 1 row into `transactions`.
-    *   **Case 2: NO (Bill/Payable)**
-        *   User selects `Due Date`.
-        *   *Result:* Insert 1 row into `bills` (Status: Unpaid). No money moves yet.
+### A. Adding Expenses (Bills)
 
-### B. Accounts Payable (Partial Payments)
-1.  User views **Bills List** (Filtered by Due Date).
-2.  Taps a $1,000 Bill -> Selects **"Record Payment"**.
-3.  Enters $500 (Partial) via "Check".
-4.  **System:**
-    *   Creates a `transaction` (-$500).
-    *   Links it to `bill_id`.
-    *   Updates `bill.status` to 'partial'.
-    *   *Calculation:* App displays "Remaining Due: $500".
+**Always Itemized Entry:**
+- Enter items with qty, price, tax
+- One item = simple expense
+- Multiple items = detailed breakdown
 
-### C. Invoicing & PDF (Freelance)
-1.  User creates Invoice. Selects **Layout: Service** (hides Qty).
-2.  Adds Line Item: "API Development", Price: $5000.
-3.  **Action:** "Download PDF".
-    *   Frontend fetches `tenant.logo_url`.
-    *   `@react-pdf` renders the document client-side.
-    *   Includes Footer: "Please pay to [Tenant Address Details]".
+**Two Paths:**
 
-### D. Transfers (Owner's Draw)
-1.  Source: **Pizza Checking** (Tenant A).
-2.  Dest: **Personal Checking** (Tenant B).
-3.  **System:** Detects different `tenant_id`.
-    *   Transaction 1 (Tenant A): Expense "Owner Draw".
-    *   Transaction 2 (Tenant B): Income "Owner Equity".
+1. **With Vendor (Credit Account):**
+   - Select vendor → items auto-suggest from history
+   - Toggle "Paid" OFF → Creates unpaid bill (AP)
+   - Toggle "Paid" ON → Select account → Paid immediately
+
+2. **Without Vendor (Quick Expense):**
+   - No vendor selected → Must select account
+   - Always paid immediately
+   - No price tracking (items table)
+
+### B. Item Price Tracking
+- Items are tracked per vendor
+- When entering a bill, typing suggests existing items
+- Selecting fills in last known price
+- Saving updates the item's `last_unit_price`
+- View price history in Items page
+
+### C. Contact Balances (Accounts Payable)
+- Each vendor has a `balance` field
+- Bill created → Balance increases (you owe them)
+- Payment made → Balance decreases
+- View transaction history per contact
+
+### D. Invoicing (Accounts Receivable)
+- Create invoice for customer
+- Toggle "Paid" OFF → Creates unpaid invoice (AR)
+- Toggle "Paid" ON → Select account → Payment received
+- PDF generation with tenant branding
+
+### E. Cash Ledger (Transactions)
+- Read-only view of all cash movements
+- Shows bill payments and invoice receipts
+- No direct entry - all flows through Bills/Invoices
 
 ---
 
-## 6. Directory Structure (Cursor Context)
+## 6. Accounting Principles
+
+### Accrual Basis
+- **Expense recorded** when bill is created (not when paid)
+- **Income recorded** when invoice is created (not when received)
+
+### Double-Entry (Simplified)
+- Bill created → Expense ↑, Accounts Payable ↑
+- Bill paid → Accounts Payable ↓, Cash ↓
+- Invoice created → Accounts Receivable ↑, Revenue ↑
+- Invoice paid → Cash ↑, Accounts Receivable ↓
+
+---
+
+## 7. Directory Structure
 
 ```text
 /src
+  /app
+    /(auth)              # Login, Signup
+    /(dashboard)         # Protected pages
+      /dashboard         # Overview
+      /transactions      # Cash ledger (read-only)
+      /bills             # Expenses/AP
+      /invoices          # Income/AR
+      /contacts          # Vendors & Customers
+      /items             # Item price management
+      /accounts          # Bank/cash accounts
   /components
-    /ui                 # Shadcn primitives (Button, Drawer, Form, etc.)
-    /layout             # AppShell, MobileNav, Sidebar
-    /shared             # TenantSwitcher.tsx (Critical Component)
+    /ui                  # Shadcn primitives
+    /layout              # AppShell, Navigation
+    /shared              # TenantSwitcher
   /features
-    /auth               # Login, SignUp
-    /dashboard          # StatCards, Charts (Recharts)
-    /transactions       # TransactionList, AddTransactionDrawer
-    /bills              # BillList, BillPaymentDialog
-    /invoicing          # InvoiceBuilder, InvoicePDF
-    /contacts           # ContactManagement
+    /auth                # Auth actions
+    /bills               # AddBillDrawer, EditBillDrawer, RecordPaymentDialog
+    /invoicing           # CreateInvoiceDialog, InvoicePDF
+    /contacts            # ContactDetailsDrawer, EditContactDialog
   /lib
-    /store              # useTenantStore (Zustand)
-    /supabase           # Client & Types
-    /utils              # Formatters
+    /store               # useTenantStore (Zustand)
+    /supabase            # Client & Types
   /hooks
-    useTenant.ts        # Helper to get current tenant ID
+    useTenant.ts         # Current tenant helper
 ```
 
 ---
 
-## 7. Implementation Plan (Prompts for Cursor)
+## 8. UI/UX Principles
 
-**Phase 1: Foundation (DB & Auth)**
-> "Initialize a React/Vite app with Tailwind and Shadcn. Setup Supabase Client. Generate the SQL migrations for the `tenants`, `users`, and `tenant_users` tables. Create a 'Trigger' that creates a 'Personal' tenant for every new user signup."
-
-**Phase 2: Tenant System (The Core)**
-> "Implement the `useTenantStore` using Zustand. Build the `TenantSwitcher` component that queries `tenant_users` to list available workspaces. Apply RLS policies to ensure I can't see tenants I don't own."
-
-**Phase 3: Transactions & Bills (Data Entry)**
-> "Build the 'Add Transaction' Drawer. It needs a 'Paid Now' toggle. If Paid=True, save to `transactions`. If Paid=False, save to `bills`. Implement the Supabase hooks for this."
-
-**Phase 4: Invoicing (PDFs)**
-> "Create the Invoice Form using `useFieldArray` for line items. Then, implement `InvoicePDF.tsx` using `@react-pdf/renderer` to generate a professional PDF based on the current Tenant's logo and address."
+- **Keep it easy** - One item entry works for simple expenses
+- **Always itemized** - No toggle between total/items
+- **Smart defaults** - Auto-suggest from history
+- **Clear status** - Paid vs Unpaid visible at glance
+- **Mobile-first** - Drawer components for mobile entry

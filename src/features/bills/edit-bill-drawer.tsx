@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Trash2, Calculator } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Drawer,
@@ -30,7 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
@@ -39,19 +38,18 @@ import type { Bill, BillLine, Contact, Item } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
 const formSchema = z.object({
-  vendor_id: z.string().min(1, 'Vendor is required'),
+  vendor_id: z.string().optional(),
   bill_number: z.string().optional(),
   issue_date: z.string().min(1, 'Issue date is required'),
   due_date: z.string().optional(),
   description: z.string().optional(),
-  total_amount: z.number().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
 interface LineItem {
   id: string;
-  db_id?: string; // Original database ID for existing lines
+  db_id?: string;
   item_id: string | null;
   description: string;
   quantity: number;
@@ -71,7 +69,6 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState<Contact[]>([]);
   const [items, setItems] = useState<Item[]>([]);
-  const [useLineItems, setUseLineItems] = useState(false);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
   const [suggestions, setSuggestions] = useState<Item[]>([]);
@@ -85,11 +82,11 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
       issue_date: new Date().toISOString().split('T')[0],
       due_date: '',
       description: '',
-      total_amount: 0,
     },
   });
 
-  const selectedVendorId = form.watch('vendor_id');
+  const watchedVendorId = form.watch('vendor_id');
+  const selectedVendorId = watchedVendorId && watchedVendorId !== 'none' ? watchedVendorId : null;
 
   // Load bill data when bill changes
   useEffect(() => {
@@ -98,14 +95,12 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     const loadBillData = async () => {
       const supabase = createClient();
 
-      // Set form values
       form.reset({
-        vendor_id: bill.vendor_id || '',
+        vendor_id: bill.vendor_id || 'none',
         bill_number: bill.bill_number || '',
         issue_date: bill.issue_date,
         due_date: bill.due_date || '',
         description: bill.description || '',
-        total_amount: bill.total_amount,
       });
 
       // Load bill lines
@@ -116,9 +111,8 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
         .order('sort_order');
 
       const lines = (linesData || []) as BillLine[];
-      
+
       if (lines.length > 0) {
-        setUseLineItems(true);
         setLineItems(
           lines.map((line) => ({
             id: crypto.randomUUID(),
@@ -132,9 +126,16 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
         );
         setOriginalLineIds(lines.map((l) => l.id));
       } else {
-        setUseLineItems(false);
+        // Bill was created without lines (legacy) - create one from total
         setLineItems([
-          { id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+          {
+            id: crypto.randomUUID(),
+            item_id: null,
+            description: bill.description || 'Item',
+            quantity: 1,
+            unit_price: bill.total_amount,
+            tax_rate: 0,
+          },
         ]);
         setOriginalLineIds([]);
       }
@@ -186,7 +187,6 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     loadItems();
   }, [tenant, selectedVendorId]);
 
-  // Filter suggestions based on input
   const handleDescriptionChange = (id: string, value: string, index: number) => {
     setLineItems((prev) =>
       prev.map((item) =>
@@ -194,7 +194,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
       )
     );
 
-    if (value.length >= 1) {
+    if (value.length >= 1 && items.length > 0) {
       const filtered = items.filter((item) =>
         item.name.toLowerCase().includes(value.toLowerCase())
       );
@@ -218,7 +218,6 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     setActiveItemIndex(null);
   };
 
-  // Calculate total from line items
   const calculateTotal = () => {
     return lineItems.reduce((sum, item) => {
       const subtotal = item.quantity * item.unit_price;
@@ -251,55 +250,56 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const onSubmit = async (values: FormValues) => {
     if (!tenant || !bill) return;
 
-    // Validate line items if using them
-    if (useLineItems) {
-      const hasEmptyDescription = lineItems.some((item) => !item.description.trim());
-      if (hasEmptyDescription) {
-        toast.error('All line items must have a description');
-        return;
-      }
+    const hasEmptyDescription = lineItems.some((item) => !item.description.trim());
+    if (hasEmptyDescription) {
+      toast.error('All items must have a description');
+      return;
+    }
+
+    const total = calculateTotal();
+    if (total <= 0) {
+      toast.error('Bill total must be greater than 0');
+      return;
     }
 
     setLoading(true);
     const supabase = createClient();
 
-    try {
-      // Calculate total
-      const totalAmount = useLineItems ? calculateTotal() : (values.total_amount || 0);
+    const vendorId = values.vendor_id && values.vendor_id !== 'none' ? values.vendor_id : null;
 
-      // Update bill
+    try {
+      // Update bill (total will be recalculated by trigger)
       const { error: billError } = await supabase
         .from('bills')
         .update({
-          vendor_id: values.vendor_id,
+          vendor_id: vendorId,
           bill_number: values.bill_number || null,
           issue_date: values.issue_date,
           due_date: values.due_date || null,
           description: values.description || null,
-          total_amount: useLineItems ? 0 : totalAmount,
+          total_amount: 0, // Will be updated by trigger
         })
         .eq('id', bill.id);
 
       if (billError) throw billError;
 
-      // Handle line items
-      if (useLineItems) {
-        // Delete removed lines
-        const currentDbIds = lineItems.filter((l) => l.db_id).map((l) => l.db_id!);
-        const deletedIds = originalLineIds.filter((id) => !currentDbIds.includes(id));
+      // Delete removed lines
+      const currentDbIds = lineItems.filter((l) => l.db_id).map((l) => l.db_id!);
+      const deletedIds = originalLineIds.filter((id) => !currentDbIds.includes(id));
 
-        if (deletedIds.length > 0) {
-          await supabase.from('bill_lines').delete().in('id', deletedIds);
-        }
+      if (deletedIds.length > 0) {
+        await supabase.from('bill_lines').delete().in('id', deletedIds);
+      }
 
-        // Upsert items to track prices (per vendor)
+      // Upsert items for price tracking (only if vendor selected)
+      if (vendorId) {
         for (const lineItem of lineItems) {
           if (lineItem.description.trim()) {
             const { data: existingItem } = await supabase
               .from('items')
               .select('id')
               .eq('tenant_id', tenant.id)
-              .eq('vendor_id', values.vendor_id)
+              .eq('vendor_id', vendorId)
               .eq('name', lineItem.description.trim())
               .single();
 
@@ -315,7 +315,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                 .from('items')
                 .insert({
                   tenant_id: tenant.id,
-                  vendor_id: values.vendor_id,
+                  vendor_id: vendorId,
                   name: lineItem.description.trim(),
                   last_unit_price: lineItem.unit_price,
                 })
@@ -328,31 +328,26 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
             }
           }
         }
+      }
 
-        // Update existing lines and insert new ones
-        for (let i = 0; i < lineItems.length; i++) {
-          const lineItem = lineItems[i];
-          const lineData = {
-            bill_id: bill.id,
-            item_id: lineItem.item_id,
-            description: lineItem.description,
-            quantity: lineItem.quantity,
-            unit_price: lineItem.unit_price,
-            tax_rate: lineItem.tax_rate,
-            total: lineItem.quantity * lineItem.unit_price * (1 + lineItem.tax_rate / 100),
-            sort_order: i,
-          };
+      // Update existing lines and insert new ones
+      for (let i = 0; i < lineItems.length; i++) {
+        const lineItem = lineItems[i];
+        const lineData = {
+          bill_id: bill.id,
+          item_id: lineItem.item_id,
+          description: lineItem.description,
+          quantity: lineItem.quantity,
+          unit_price: lineItem.unit_price,
+          tax_rate: lineItem.tax_rate,
+          total: lineItem.quantity * lineItem.unit_price * (1 + lineItem.tax_rate / 100),
+          sort_order: i,
+        };
 
-          if (lineItem.db_id) {
-            await supabase.from('bill_lines').update(lineData).eq('id', lineItem.db_id);
-          } else {
-            await supabase.from('bill_lines').insert(lineData);
-          }
-        }
-      } else {
-        // Remove all line items if switching to total mode
-        if (originalLineIds.length > 0) {
-          await supabase.from('bill_lines').delete().in('id', originalLineIds);
+        if (lineItem.db_id) {
+          await supabase.from('bill_lines').update(lineData).eq('id', lineItem.db_id);
+        } else {
+          await supabase.from('bill_lines').insert(lineData);
         }
       }
 
@@ -370,7 +365,6 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const handleClose = () => {
     form.reset();
     setLineItems([{ id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
-    setUseLineItems(false);
     setSuggestions([]);
     setActiveItemIndex(null);
     setItems([]);
@@ -399,14 +393,17 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                 name="vendor_id"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Vendor *</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <FormLabel className="text-slate-300">Vendor</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || ''}>
                       <FormControl>
                         <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
-                          <SelectValue placeholder="Select vendor" />
+                          <SelectValue placeholder="Select vendor (optional)" />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent className="bg-slate-800 border-slate-700">
+                        <SelectItem value="none" className="text-slate-400">
+                          No vendor
+                        </SelectItem>
                         {vendors.map((vendor) => (
                           <SelectItem key={vendor.id} value={vendor.id} className="text-white">
                             {vendor.name}
@@ -419,14 +416,14 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                 )}
               />
 
-              {/* Bill Number & Dates */}
+              {/* Bill Number & Date */}
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="bill_number"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-slate-300">Bill Number</FormLabel>
+                      <FormLabel className="text-slate-300">Bill #</FormLabel>
                       <FormControl>
                         <Input
                           placeholder="INV-001"
@@ -444,7 +441,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                   name="issue_date"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-slate-300">Issue Date *</FormLabel>
+                      <FormLabel className="text-slate-300">Date *</FormLabel>
                       <FormControl>
                         <Input
                           type="date"
@@ -476,96 +473,30 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                 )}
               />
 
-              <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="text-slate-300">Description</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder="Bill description"
-                        {...field}
-                        className="bg-slate-700/50 border-slate-600 text-white"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              {/* Toggle between total and line items */}
-              <div className="flex items-center justify-between p-3 bg-slate-700/30 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Calculator className="h-4 w-4 text-slate-400" />
-                  <Label className="text-slate-300">Itemize bill</Label>
+              {/* Items */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-slate-300">Items</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={addLineItem}
+                    className="text-emerald-400 hover:text-emerald-300"
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add
+                  </Button>
                 </div>
-                <Switch checked={useLineItems} onCheckedChange={setUseLineItems} />
-              </div>
 
-              {/* Total Amount (if not using line items) */}
-              {!useLineItems && (
-                <FormField
-                  control={form.control}
-                  name="total_amount"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="text-slate-300">Total Amount *</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          {...field}
-                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
-                          className="bg-slate-700/50 border-slate-600 text-white text-lg font-bold"
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-
-              {/* Line Items */}
-              {useLineItems && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-slate-300">Items</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={addLineItem}
-                      className="text-emerald-400 hover:text-emerald-300"
-                    >
-                      <Plus className="h-4 w-4 mr-1" />
-                      Add Item
-                    </Button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {lineItems.map((item, index) => (
-                      <div key={item.id} className="p-3 bg-slate-700/30 rounded-lg space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-slate-400">Item {index + 1}</span>
-                          {lineItems.length > 1 && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeLineItem(item.id)}
-                              className="text-red-400 hover:text-red-300 h-6 w-6 p-0"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
-
+                  {lineItems.map((item, index) => (
+                    <div key={item.id} className="p-3 bg-slate-700/30 rounded-lg space-y-2">
+                      <div className="flex gap-2">
                         {/* Description with autocomplete */}
-                        <div className="relative">
+                        <div className="relative flex-1">
                           <Input
-                            placeholder="Start typing item name..."
+                            placeholder="Item name"
                             value={item.description}
                             onChange={(e) => handleDescriptionChange(item.id, e.target.value, index)}
                             onBlur={() =>
@@ -599,67 +530,69 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                           )}
                         </div>
 
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
-                            <Label className="text-xs text-slate-400">Qty</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={item.quantity}
-                              onChange={(e) =>
-                                updateLineItem(item.id, 'quantity', parseFloat(e.target.value) || 0)
-                              }
-                              className="bg-slate-700/50 border-slate-600 text-white"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-slate-400">Unit Price</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={item.unit_price}
-                              onChange={(e) =>
-                                updateLineItem(item.id, 'unit_price', parseFloat(e.target.value) || 0)
-                              }
-                              className="bg-slate-700/50 border-slate-600 text-white"
-                            />
-                          </div>
-                          <div>
-                            <Label className="text-xs text-slate-400">Tax %</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={item.tax_rate}
-                              onChange={(e) =>
-                                updateLineItem(item.id, 'tax_rate', parseFloat(e.target.value) || 0)
-                              }
-                              className="bg-slate-700/50 border-slate-600 text-white"
-                            />
-                          </div>
-                        </div>
+                        {lineItems.length > 1 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeLineItem(item.id)}
+                            className="text-red-400 hover:text-red-300 h-10 w-10 p-0"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
 
-                        <div className="text-right text-sm text-slate-400">
-                          Subtotal:{' '}
-                          <span className="text-white font-medium">
-                            {formatCurrency(
-                              item.quantity * item.unit_price * (1 + item.tax_rate / 100),
-                              tenant?.currency || 'USD'
-                            )}
-                          </span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-xs text-slate-400">Qty</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={item.quantity}
+                            onChange={(e) =>
+                              updateLineItem(item.id, 'quantity', parseFloat(e.target.value) || 0)
+                            }
+                            className="bg-slate-700/50 border-slate-600 text-white"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-slate-400">Price</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={item.unit_price}
+                            onChange={(e) =>
+                              updateLineItem(item.id, 'unit_price', parseFloat(e.target.value) || 0)
+                            }
+                            className="bg-slate-700/50 border-slate-600 text-white"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs text-slate-400">Tax %</Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={item.tax_rate}
+                            onChange={(e) =>
+                              updateLineItem(item.id, 'tax_rate', parseFloat(e.target.value) || 0)
+                            }
+                            className="bg-slate-700/50 border-slate-600 text-white"
+                          />
                         </div>
                       </div>
-                    ))}
-                  </div>
-
-                  {/* Total */}
-                  <div className="flex items-center justify-between p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
-                    <span className="text-slate-300 font-medium">Total</span>
-                    <span className="text-xl font-bold text-emerald-400">
-                      {formatCurrency(calculateTotal(), tenant?.currency || 'USD')}
-                    </span>
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              )}
+
+                {/* Total */}
+                <div className="flex items-center justify-between p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                  <span className="text-slate-300 font-medium">Total</span>
+                  <span className="text-xl font-bold text-emerald-400">
+                    {formatCurrency(calculateTotal(), tenant?.currency || 'USD')}
+                  </span>
+                </div>
+              </div>
 
               <DrawerFooter className="px-0">
                 <Button
@@ -685,4 +618,3 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     </Drawer>
   );
 }
-
