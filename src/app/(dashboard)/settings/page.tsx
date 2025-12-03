@@ -57,6 +57,7 @@ interface Member {
   user_id: string;
   role: 'owner' | 'manager' | 'viewer';
   profile: {
+    id: string;
     email: string;
     full_name: string | null;
   } | null;
@@ -110,13 +111,33 @@ export default function SettingsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     setCurrentUserId(user?.id || null);
 
-    // Get members with profiles
-    const { data } = await supabase
+    // Get tenant users first
+    const { data: tenantUsers } = await supabase
       .from('tenant_users')
-      .select('id, user_id, role, profile:profiles(email, full_name)')
+      .select('id, user_id, role')
       .eq('tenant_id', tenant.id);
 
-    setMembers((data || []) as Member[]);
+    if (!tenantUsers || tenantUsers.length === 0) {
+      setMembers([]);
+      return;
+    }
+
+    // Get profiles for these users
+    const userIds = tenantUsers.map(tu => tu.user_id);
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('id', userIds);
+
+    // Combine the data
+    const membersData: Member[] = tenantUsers.map(tu => ({
+      id: tu.id,
+      user_id: tu.user_id,
+      role: tu.role as 'owner' | 'manager' | 'viewer',
+      profile: profiles?.find(p => p.id === tu.user_id) || null,
+    }));
+
+    setMembers(membersData);
   }, [tenant]);
 
   useEffect(() => {
