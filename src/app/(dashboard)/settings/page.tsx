@@ -260,6 +260,59 @@ export default function SettingsPage() {
     loadMembers();
   };
 
+  const onChangeRole = async (memberId: string, newRole: 'owner' | 'manager' | 'viewer') => {
+    const supabase = createClient();
+    
+    // If transferring ownership
+    if (newRole === 'owner') {
+      if (!confirm('Transfer ownership? You will become a manager.')) return;
+      
+      // Find current owner's membership id
+      const currentOwner = members.find(m => m.role === 'owner');
+      if (!currentOwner) return;
+      
+      // Update new owner
+      const { error: newOwnerError } = await supabase
+        .from('tenant_users')
+        .update({ role: 'owner' })
+        .eq('id', memberId);
+      
+      if (newOwnerError) {
+        toast.error('Failed to transfer ownership');
+        return;
+      }
+      
+      // Demote current owner to manager
+      const { error: demoteError } = await supabase
+        .from('tenant_users')
+        .update({ role: 'manager' })
+        .eq('id', currentOwner.id);
+      
+      if (demoteError) {
+        toast.error('Ownership transferred but failed to update your role');
+        loadMembers();
+        return;
+      }
+      
+      toast.success('Ownership transferred');
+      loadMembers();
+      return;
+    }
+    
+    const { error } = await supabase
+      .from('tenant_users')
+      .update({ role: newRole })
+      .eq('id', memberId);
+
+    if (error) {
+      toast.error('Failed to update role');
+      return;
+    }
+
+    toast.success('Role updated');
+    loadMembers();
+  };
+
   // Check if current user is owner
   const isOwner = members.find(m => m.user_id === currentUserId)?.role === 'owner';
 
@@ -444,10 +497,41 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge className={`${roleColors[member.role]} border`}>
-                        <RoleIcon className="h-3 w-3 mr-1" />
-                        {member.role}
-                      </Badge>
+                      {isOwner && member.role !== 'owner' ? (
+                        <Select
+                          value={member.role}
+                          onValueChange={(value) => onChangeRole(member.id, value as 'owner' | 'manager' | 'viewer')}
+                        >
+                          <SelectTrigger className="w-32 bg-slate-700/50 border-slate-600 text-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-800 border-slate-700">
+                            <SelectItem value="owner" className="text-white">
+                              <div className="flex items-center gap-2">
+                                <Crown className="h-3 w-3" />
+                                Owner
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="manager" className="text-white">
+                              <div className="flex items-center gap-2">
+                                <Shield className="h-3 w-3" />
+                                Manager
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="viewer" className="text-white">
+                              <div className="flex items-center gap-2">
+                                <Eye className="h-3 w-3" />
+                                Viewer
+                              </div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Badge className={`${roleColors[member.role]} border`}>
+                          <RoleIcon className="h-3 w-3 mr-1" />
+                          {member.role}
+                        </Badge>
+                      )}
                       {isOwner && member.role !== 'owner' && (
                         <Button
                           variant="ghost"
