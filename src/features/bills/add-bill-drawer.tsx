@@ -34,7 +34,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/utils/format';
+import { formatCurrency, generateId } from '@/lib/utils/format';
 import type { Contact, Item, Account } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
@@ -71,7 +71,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+    { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
   ]);
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
   const [suggestions, setSuggestions] = useState<Item[]>([]);
@@ -197,7 +197,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
   const addLineItem = () => {
     setLineItems([
       ...lineItems,
-      { id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
     ]);
   };
 
@@ -337,7 +337,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
 
       toast.success(isPaidNow ? 'Expense paid & saved' : 'Bill saved');
       form.reset();
-      setLineItems([{ id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+      setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
       setMarkAsPaid(false);
       onOpenChange(false);
       onSuccess?.();
@@ -351,7 +351,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
 
   const handleClose = () => {
     form.reset();
-    setLineItems([{ id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
     setMarkAsPaid(false);
     setSuggestions([]);
     setActiveItemIndex(null);

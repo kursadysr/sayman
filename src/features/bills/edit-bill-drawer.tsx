@@ -33,7 +33,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/utils/format';
+import { formatCurrency, generateId } from '@/lib/utils/format';
 import type { Bill, BillLine, Contact, Item } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
@@ -115,7 +115,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
       if (lines.length > 0) {
         setLineItems(
           lines.map((line) => ({
-            id: crypto.randomUUID(),
+            id: generateId(),
             db_id: line.id,
             item_id: line.item_id,
             description: line.description,
@@ -129,7 +129,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
         // Bill was created without lines (legacy) - create one from total
         setLineItems([
           {
-            id: crypto.randomUUID(),
+            id: generateId(),
             item_id: null,
             description: bill.description || 'Item',
             quantity: 1,
@@ -229,7 +229,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const addLineItem = () => {
     setLineItems([
       ...lineItems,
-      { id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
     ]);
   };
 
@@ -364,7 +364,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
 
   const handleClose = () => {
     form.reset();
-    setLineItems([{ id: crypto.randomUUID(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
     setSuggestions([]);
     setActiveItemIndex(null);
     setItems([]);
