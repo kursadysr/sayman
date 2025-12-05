@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowUpCircle, ArrowDownCircle, Receipt, BookOpen, Filter, Landmark, ExternalLink } from 'lucide-react';
+import { Receipt, BookOpen, Landmark, ExternalLink, Calendar } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -11,6 +11,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SelectSeparator,
 } from '@/components/ui/select';
 import {
   Dialog,
@@ -18,12 +19,19 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { DateInput } from '@/components/ui/date-input';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import type { Account } from '@/lib/supabase/types';
+
+type SortOption = 'date_desc' | 'date_asc';
+type TypeFilter = 'all' | 'bill' | 'invoice' | 'loan' | 'other';
+type DateFilter = 'all' | 'this_month' | 'last_month' | 'q1' | 'q2' | 'q3' | 'q4' | 'this_year' | 'last_year' | 'custom';
 
 interface AccountEffect {
   accountName: string;
@@ -72,6 +80,14 @@ export default function LedgerPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<SortOption>('date_desc');
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [customDateStart, setCustomDateStart] = useState<string>('');
+  const [customDateEnd, setCustomDateEnd] = useState<string>('');
+  const [customDateDialogOpen, setCustomDateDialogOpen] = useState(false);
+  const [tempStartDate, setTempStartDate] = useState<string>('');
+  const [tempEndDate, setTempEndDate] = useState<string>('');
   const [loading, setLoading] = useState(true);
   
   // Detail dialog for transactions without source
@@ -113,6 +129,100 @@ export default function LedgerPage() {
     loadData();
   }, [loadData]);
 
+  // Get date range based on filter
+  const getDateRange = useCallback((filter: DateFilter): { start: Date | null; end: Date | null } => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+
+    switch (filter) {
+      case 'this_month':
+        return {
+          start: new Date(year, month, 1),
+          end: new Date(year, month + 1, 0)
+        };
+      case 'last_month':
+        return {
+          start: new Date(year, month - 1, 1),
+          end: new Date(year, month, 0)
+        };
+      case 'q1':
+        return {
+          start: new Date(year, 0, 1),
+          end: new Date(year, 2, 31)
+        };
+      case 'q2':
+        return {
+          start: new Date(year, 3, 1),
+          end: new Date(year, 5, 30)
+        };
+      case 'q3':
+        return {
+          start: new Date(year, 6, 1),
+          end: new Date(year, 8, 30)
+        };
+      case 'q4':
+        return {
+          start: new Date(year, 9, 1),
+          end: new Date(year, 11, 31)
+        };
+      case 'this_year':
+        return {
+          start: new Date(year, 0, 1),
+          end: new Date(year, 11, 31)
+        };
+      case 'last_year':
+        return {
+          start: new Date(year - 1, 0, 1),
+          end: new Date(year - 1, 11, 31)
+        };
+      case 'custom':
+        return {
+          start: customDateStart ? new Date(customDateStart) : null,
+          end: customDateEnd ? new Date(customDateEnd) : null
+        };
+      default:
+        return { start: null, end: null };
+    }
+  }, [customDateStart, customDateEnd]);
+
+  // Handle date filter change
+  const handleDateFilterChange = (value: string) => {
+    if (value === 'custom') {
+      setTempStartDate(customDateStart || new Date().toISOString().split('T')[0]);
+      setTempEndDate(customDateEnd || new Date().toISOString().split('T')[0]);
+      setCustomDateDialogOpen(true);
+    } else {
+      setDateFilter(value as DateFilter);
+    }
+  };
+
+  // Apply custom date range
+  const applyCustomDateRange = () => {
+    setCustomDateStart(tempStartDate);
+    setCustomDateEnd(tempEndDate);
+    setDateFilter('custom');
+    setCustomDateDialogOpen(false);
+  };
+
+  // Get date filter label
+  const getDateFilterLabel = (filter: DateFilter): string => {
+    switch (filter) {
+      case 'this_month': return 'This Month';
+      case 'last_month': return 'Last Month';
+      case 'q1': return 'Q1';
+      case 'q2': return 'Q2';
+      case 'q3': return 'Q3';
+      case 'q4': return 'Q4';
+      case 'this_year': return 'This Year';
+      case 'last_year': return 'Last Year';
+      case 'custom': return customDateStart && customDateEnd 
+        ? `${formatDate(customDateStart)} - ${formatDate(customDateEnd)}`
+        : 'Custom';
+      default: return 'All Time';
+    }
+  };
+
   // Build ledger entries with running balance
   const ledgerEntries = useMemo(() => {
     const accountBalances: Record<string, number> = {};
@@ -126,9 +236,32 @@ export default function LedgerPage() {
 
     const entries: LedgerEntry[] = [];
     
-    const filteredTxs = selectedAccountId === 'all' 
+    // Filter by account
+    let filteredTxs = selectedAccountId === 'all' 
       ? transactions 
       : transactions.filter(tx => tx.account_id === selectedAccountId);
+    
+    // Filter by type
+    if (typeFilter !== 'all') {
+      filteredTxs = filteredTxs.filter(tx => {
+        if (typeFilter === 'bill') return tx.bill_id;
+        if (typeFilter === 'invoice') return tx.invoice_id;
+        if (typeFilter === 'loan') return tx.loan_payment_id || tx.description?.startsWith('Loan received:') || tx.description?.startsWith('Loan disbursed:');
+        if (typeFilter === 'other') return !tx.bill_id && !tx.invoice_id && !tx.loan_payment_id && !tx.description?.startsWith('Loan');
+        return true;
+      });
+    }
+
+    // Filter by date
+    if (dateFilter !== 'all') {
+      const { start, end } = getDateRange(dateFilter);
+      if (start && end) {
+        filteredTxs = filteredTxs.filter(tx => {
+          const txDate = new Date(tx.date);
+          return txDate >= start && txDate <= end;
+        });
+      }
+    }
 
     filteredTxs.forEach((tx) => {
       const accountId = tx.account_id;
@@ -256,8 +389,16 @@ export default function LedgerPage() {
       });
     });
 
-    return entries;
-  }, [transactions, accounts, selectedAccountId]);
+    // Apply sorting
+    const sortedEntries = [...entries].sort((a, b) => {
+      if (sortBy === 'date_desc') {
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      }
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
+
+    return sortedEntries;
+  }, [transactions, accounts, selectedAccountId, typeFilter, dateFilter, getDateRange, sortBy]);
 
   // Handle entry click - navigate to source
   const handleEntryClick = (entry: LedgerEntry) => {
@@ -336,10 +477,13 @@ export default function LedgerPage() {
     );
   }
 
+  // Check if any filter is active
+  const hasActiveFilters = typeFilter !== 'all' || selectedAccountId !== 'all' || dateFilter !== 'all';
+
   return (
     <div className="p-4 lg:p-8 pb-24 lg:pb-8">
       {/* Header */}
-      <div className="flex flex-col gap-4 mb-6">
+      <div className="flex flex-col gap-3 mb-4">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <BookOpen className="h-6 w-6 text-emerald-400" />
@@ -348,12 +492,36 @@ export default function LedgerPage() {
           <p className="text-slate-400 text-sm">Tap any entry to view details</p>
         </div>
         
-        {/* Account Filter */}
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-slate-400" />
+        {/* All Filters in One Row */}
+        <div className="grid grid-cols-4 gap-2">
+          {/* Date Filter */}
+          <Select value={dateFilter} onValueChange={handleDateFilterChange}>
+            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
+              <Calendar className="h-3 w-3 mr-1 text-slate-400 flex-shrink-0" />
+              <span className="truncate">{getDateFilterLabel(dateFilter)}</span>
+            </SelectTrigger>
+            <SelectContent className="bg-slate-800 border-slate-700">
+              <SelectItem value="all" className="text-white">All Time</SelectItem>
+              <SelectSeparator className="bg-slate-700" />
+              <SelectItem value="this_month" className="text-white">This Month</SelectItem>
+              <SelectItem value="last_month" className="text-white">Last Month</SelectItem>
+              <SelectSeparator className="bg-slate-700" />
+              <SelectItem value="q1" className="text-white">Q1</SelectItem>
+              <SelectItem value="q2" className="text-white">Q2</SelectItem>
+              <SelectItem value="q3" className="text-white">Q3</SelectItem>
+              <SelectItem value="q4" className="text-white">Q4</SelectItem>
+              <SelectSeparator className="bg-slate-700" />
+              <SelectItem value="this_year" className="text-white">This Year</SelectItem>
+              <SelectItem value="last_year" className="text-white">Last Year</SelectItem>
+              <SelectSeparator className="bg-slate-700" />
+              <SelectItem value="custom" className="text-white">Custom...</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Account Filter */}
           <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
-            <SelectTrigger className="flex-1 bg-slate-800 border-slate-700 text-white">
-              <SelectValue placeholder="All Accounts" />
+            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
+              <span className="truncate"><SelectValue placeholder="Account" /></span>
             </SelectTrigger>
             <SelectContent className="bg-slate-800 border-slate-700">
               <SelectItem value="all" className="text-white">All Accounts</SelectItem>
@@ -364,54 +532,60 @@ export default function LedgerPage() {
               ))}
             </SelectContent>
           </Select>
-        </div>
-      </div>
 
-      {/* Summary Cards - 2x2 Grid on Mobile */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardContent className="p-3">
-            <p className="text-slate-400 text-xs mb-1">Opening</p>
-            <p className={`text-lg font-bold ${openingBalance >= 0 ? 'text-white' : 'text-red-400'}`}>
-              {formatCurrency(openingBalance, tenant.currency)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardContent className="p-3">
-            <p className="text-slate-400 text-xs mb-1">Closing</p>
-            <p className={`text-lg font-bold ${closingBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {formatCurrency(closingBalance, tenant.currency)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-1 text-slate-400 text-xs mb-1">
-              <ArrowDownCircle className="h-3 w-3 text-red-400" />
-              Debits
-            </div>
-            <p className="text-lg font-bold text-red-400">
-              {formatCurrency(totals.debit, tenant.currency)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-800/50 border-slate-700">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-1 text-slate-400 text-xs mb-1">
-              <ArrowUpCircle className="h-3 w-3 text-green-400" />
-              Credits
-            </div>
-            <p className="text-lg font-bold text-green-400">
-              {formatCurrency(totals.credit, tenant.currency)}
-            </p>
-          </CardContent>
-        </Card>
+          {/* Type Filter */}
+          <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as TypeFilter)}>
+            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
+              <span className="truncate"><SelectValue placeholder="Type" /></span>
+            </SelectTrigger>
+            <SelectContent className="bg-slate-800 border-slate-700">
+              <SelectItem value="all" className="text-white">All Types</SelectItem>
+              <SelectItem value="bill" className="text-white">Bills</SelectItem>
+              <SelectItem value="invoice" className="text-white">Invoices</SelectItem>
+              <SelectItem value="loan" className="text-white">Loans</SelectItem>
+              <SelectItem value="other" className="text-white">Other</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Sort */}
+          <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortOption)}>
+            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
+              <span className="truncate"><SelectValue /></span>
+            </SelectTrigger>
+            <SelectContent className="bg-slate-800 border-slate-700">
+              <SelectItem value="date_desc" className="text-white">Newest</SelectItem>
+              <SelectItem value="date_asc" className="text-white">Oldest</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {/* Ledger Entries - Mobile Card View */}
       <Card className="bg-slate-800/50 border-slate-700">
         <CardContent className="p-0">
+          {/* Entry count header */}
+          {!loading && ledgerEntries.length > 0 && (
+            <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                {ledgerEntries.length} {ledgerEntries.length === 1 ? 'entry' : 'entries'}
+                {hasActiveFilters && ' (filtered)'}
+              </span>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setTypeFilter('all');
+                    setSelectedAccountId('all');
+                    setDateFilter('all');
+                  }}
+                  className="text-xs h-6 text-slate-400 hover:text-white"
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+          )}
           {loading ? (
             <div className="p-8 text-center text-slate-400">Loading...</div>
           ) : ledgerEntries.length === 0 ? (
@@ -424,15 +598,17 @@ export default function LedgerPage() {
             </div>
           ) : (
             <div className="divide-y divide-slate-700">
-              {/* Opening Balance Row */}
-              <div className="p-3 bg-slate-700/30">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 text-sm italic">Opening Balance</span>
-                  <span className={`font-bold ${openingBalance >= 0 ? 'text-white' : 'text-red-400'}`}>
-                    {formatCurrency(openingBalance, tenant.currency)}
-                  </span>
+              {/* Opening Balance Row - only show for chronological ascending sort */}
+              {sortBy === 'date_asc' && (
+                <div className="p-3 bg-slate-700/30">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400 text-sm italic">Opening Balance</span>
+                    <span className={`font-bold ${openingBalance >= 0 ? 'text-white' : 'text-red-400'}`}>
+                      {formatCurrency(openingBalance, tenant.currency)}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Transaction Entries */}
               {ledgerEntries.map((entry) => (
@@ -497,29 +673,35 @@ export default function LedgerPage() {
                     </div>
                   </div>
                   
-                  {/* Row 4: Running Balance */}
-                  <div className="flex justify-end mt-2">
-                    <span className={`text-xs ${entry.balance >= 0 ? 'text-slate-400' : 'text-red-400'}`}>
-                      Cash Bal: {formatCurrency(entry.balance, tenant.currency)}
-                    </span>
-                  </div>
+                  {/* Row 4: Running Balance - only for chronological sort */}
+                  {sortBy === 'date_asc' && (
+                    <div className="flex justify-end mt-2">
+                      <span className={`text-xs ${entry.balance >= 0 ? 'text-slate-400' : 'text-red-400'}`}>
+                        Bal: {formatCurrency(entry.balance, tenant.currency)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
 
-              {/* Closing Balance Row */}
+              {/* Closing Balance / Totals Row */}
               <div className="p-3 bg-slate-700/30">
                 <div className="flex justify-between items-center">
                   <div className="text-sm">
-                    <span className="text-slate-400 italic">Closing Balance</span>
+                    <span className="text-slate-400 italic">
+                      {sortBy === 'date_asc' ? 'Closing Balance' : 'Totals'}
+                    </span>
                     <div className="text-xs text-slate-500 mt-0.5">
                       Debits: <span className="text-red-400">{formatCurrency(totals.debit, tenant.currency)}</span>
                       {' • '}
                       Credits: <span className="text-green-400">{formatCurrency(totals.credit, tenant.currency)}</span>
                     </div>
                   </div>
-                  <span className={`text-lg font-bold ${closingBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {formatCurrency(closingBalance, tenant.currency)}
-                  </span>
+                  {sortBy === 'date_asc' && (
+                    <span className={`text-lg font-bold ${closingBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatCurrency(closingBalance, tenant.currency)}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -606,6 +788,53 @@ export default function LedgerPage() {
               </p>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Custom Date Range Dialog */}
+      <Dialog open={customDateDialogOpen} onOpenChange={setCustomDateDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle>Custom Date Range</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Select a custom date range for filtering
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div>
+              <Label className="text-slate-300">Start Date</Label>
+              <DateInput
+                value={tempStartDate}
+                onChange={setTempStartDate}
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-slate-300">End Date</Label>
+              <DateInput
+                value={tempEndDate}
+                onChange={setTempEndDate}
+                className="mt-1"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCustomDateDialogOpen(false)}
+              className="border-slate-600 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={applyCustomDateRange}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              Apply
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
