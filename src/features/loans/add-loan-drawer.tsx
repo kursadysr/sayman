@@ -45,7 +45,7 @@ const formSchema = z.object({
   principal_amount: z.number().min(0.01, 'Amount must be greater than 0'),
   interest_rate: z.number().min(0).max(100, 'Rate must be between 0 and 100'),
   term_months: z.number().min(1, 'Term must be at least 1 month'),
-  payment_frequency: z.enum(['weekly', 'biweekly', 'monthly', 'quarterly', 'annually']),
+  payment_frequency: z.enum(['weekly', 'biweekly', 'monthly', 'quarterly', 'annually']).optional(),
   start_date: z.string().min(1, 'Start date is required'),
   notes: z.string().optional(),
 });
@@ -72,7 +72,7 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
       principal_amount: 0,
       interest_rate: 0,
       term_months: 12,
-      payment_frequency: 'monthly',
+      payment_frequency: undefined,
       start_date: new Date().toISOString().split('T')[0],
       notes: '',
     },
@@ -84,8 +84,8 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
   const watchTerm = form.watch('term_months');
   const watchFrequency = form.watch('payment_frequency');
 
-  // Calculate payment
-  const calculatedPayment = watchPrincipal > 0 && watchTerm > 0
+  // Calculate payment (only if frequency is set)
+  const calculatedPayment = watchPrincipal > 0 && watchTerm > 0 && watchFrequency
     ? calculatePaymentAmount(
         watchPrincipal,
         watchRate / 100, // Convert percentage to decimal
@@ -122,7 +122,7 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
         principal_amount: 0,
         interest_rate: 0,
         term_months: 12,
-        payment_frequency: 'monthly',
+        payment_frequency: undefined,
         start_date: new Date().toISOString().split('T')[0],
         notes: '',
       });
@@ -144,9 +144,9 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
         principal_amount: values.principal_amount,
         interest_rate: values.interest_rate / 100, // Store as decimal
         term_months: values.term_months,
-        payment_frequency: values.payment_frequency,
+        payment_frequency: values.payment_frequency || null,
         start_date: values.start_date,
-        monthly_payment: calculatedPayment,
+        monthly_payment: calculatedPayment || null,
         remaining_balance: values.principal_amount,
         notes: values.notes || null,
       });
@@ -328,14 +328,15 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
                   name="payment_frequency"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-slate-300">Payment Frequency</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <FormLabel className="text-slate-300">Payment Frequency (Optional)</FormLabel>
+                      <Select onValueChange={(v) => field.onChange(v === 'none' ? undefined : v)} value={field.value || 'none'}>
                         <FormControl>
                           <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
-                            <SelectValue />
+                            <SelectValue placeholder="No schedule" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent className="bg-slate-800 border-slate-700">
+                          <SelectItem value="none" className="text-slate-400">No schedule</SelectItem>
                           <SelectItem value="weekly" className="text-white">Weekly</SelectItem>
                           <SelectItem value="biweekly" className="text-white">Bi-weekly</SelectItem>
                           <SelectItem value="monthly" className="text-white">Monthly</SelectItem>

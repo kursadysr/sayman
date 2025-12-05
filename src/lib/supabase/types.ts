@@ -210,7 +210,7 @@ export interface Loan {
   principal_amount: number;
   interest_rate: number; // Annual rate as decimal (0.05 = 5%)
   term_months: number;
-  payment_frequency: PaymentFrequency;
+  payment_frequency: PaymentFrequency | null;
   start_date: string;
   monthly_payment: number | null;
   remaining_balance: number;
@@ -317,7 +317,7 @@ export interface CreateLoanInput {
   principal_amount: number;
   interest_rate: number;
   term_months: number;
-  payment_frequency: PaymentFrequency;
+  payment_frequency?: PaymentFrequency;
   start_date: string;
   monthly_payment?: number;
   notes?: string;

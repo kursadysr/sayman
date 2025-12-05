@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Landmark, Calendar, Percent, DollarSign, TrendingDown, TrendingUp,
-  Plus, Trash2, ChevronDown, ChevronUp
+  Plus, Trash2, ChevronDown, ChevronUp, Pencil
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -42,6 +42,7 @@ import {
 } from '@/lib/utils/loan-calculator';
 import type { Loan, LoanPayment, Account, PaymentFrequency } from '@/lib/supabase/types';
 import { toast } from 'sonner';
+import { EditLoanDrawer } from './edit-loan-drawer';
 
 interface LoanDetailsDrawerProps {
   loan: Loan | null;
@@ -58,6 +59,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   const [loading, setLoading] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   
   // Payment form state
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
@@ -100,15 +102,22 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   // Calculate suggested payment when dialog opens
   useEffect(() => {
     if (paymentDialogOpen && loan) {
-      const suggested = calculateNextPayment(
-        loan.remaining_balance,
-        loan.interest_rate,
-        loan.payment_frequency as PaymentFrequency,
-        loan.monthly_payment || 0
-      );
-      setPaymentTotal(suggested.total);
-      setPaymentPrincipal(suggested.principal);
-      setPaymentInterest(suggested.interest);
+      if (loan.payment_frequency) {
+        const suggested = calculateNextPayment(
+          loan.remaining_balance,
+          loan.interest_rate,
+          loan.payment_frequency as PaymentFrequency,
+          loan.monthly_payment || 0
+        );
+        setPaymentTotal(suggested.total);
+        setPaymentPrincipal(suggested.principal);
+        setPaymentInterest(suggested.interest);
+      } else {
+        // No payment frequency - default to remaining balance
+        setPaymentTotal(loan.remaining_balance);
+        setPaymentPrincipal(loan.remaining_balance);
+        setPaymentInterest(0);
+      }
       setPaymentDate(new Date().toISOString().split('T')[0]);
       setPaymentAccountId('');
       setPaymentNotes('');
@@ -196,13 +205,15 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   if (!loan || !tenant) return null;
 
   const progressPercent = ((loan.principal_amount - loan.remaining_balance) / loan.principal_amount) * 100;
-  const amortizationSchedule = generateAmortizationSchedule(
-    loan.principal_amount,
-    loan.interest_rate,
-    loan.term_months,
-    new Date(loan.start_date),
-    loan.payment_frequency as PaymentFrequency
-  );
+  const amortizationSchedule = loan.payment_frequency 
+    ? generateAmortizationSchedule(
+        loan.principal_amount,
+        loan.interest_rate,
+        loan.term_months,
+        new Date(loan.start_date),
+        loan.payment_frequency as PaymentFrequency
+      )
+    : [];
 
   return (
     <>
@@ -225,15 +236,27 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                     {loan.contact && ` • ${loan.contact.name}`}
                   </DrawerDescription>
                 </div>
-                {canWrite && loan.status === 'active' && (
-                  <Button
-                    size="sm"
-                    onClick={() => setPaymentDialogOpen(true)}
-                    className="bg-emerald-500 hover:bg-emerald-600 text-white"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    Payment
-                  </Button>
+                {canWrite && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditDrawerOpen(true)}
+                      className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    {loan.status === 'active' && (
+                      <Button
+                        size="sm"
+                        onClick={() => setPaymentDialogOpen(true)}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                      >
+                        <Plus className="h-4 w-4 mr-1" />
+                        Payment
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
             </DrawerHeader>
@@ -310,10 +333,16 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                     Payment
                   </div>
                   <div className="text-white font-medium">
-                    {formatCurrency(loan.monthly_payment || 0, tenant.currency)}
-                    <span className="text-xs text-slate-400 ml-1">
-                      {formatFrequency(loan.payment_frequency)}
-                    </span>
+                    {loan.payment_frequency ? (
+                      <>
+                        {formatCurrency(loan.monthly_payment || 0, tenant.currency)}
+                        <span className="text-xs text-slate-400 ml-1">
+                          {formatFrequency(loan.payment_frequency)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-slate-400">No schedule</span>
+                    )}
                   </div>
                 </div>
                 <div className="p-3 bg-slate-700/30 rounded-lg">
@@ -343,57 +372,59 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 </div>
               </div>
 
-              {/* Amortization Schedule */}
-              <div>
-                <button
-                  onClick={() => setShowSchedule(!showSchedule)}
-                  className="flex items-center justify-between w-full p-3 bg-slate-700/30 rounded-lg text-white hover:bg-slate-700/50 transition-colors"
-                >
-                  <span className="font-medium">Amortization Schedule</span>
-                  {showSchedule ? (
-                    <ChevronUp className="h-4 w-4" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" />
-                  )}
-                </button>
-                
-                {showSchedule && (
-                  <div className="mt-2 max-h-64 overflow-y-auto">
-                    <table className="w-full text-sm">
-                      <thead className="text-slate-400 sticky top-0 bg-slate-800">
-                        <tr>
-                          <th className="text-left p-2">#</th>
-                          <th className="text-left p-2">Date</th>
-                          <th className="text-right p-2">Payment</th>
-                          <th className="text-right p-2">Principal</th>
-                          <th className="text-right p-2">Interest</th>
-                          <th className="text-right p-2">Balance</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-white">
-                        {amortizationSchedule.slice(0, 60).map((entry) => (
-                          <tr key={entry.paymentNumber} className="border-t border-slate-700">
-                            <td className="p-2">{entry.paymentNumber}</td>
-                            <td className="p-2">{entry.paymentDate.toLocaleDateString()}</td>
-                            <td className="text-right p-2">
-                              {formatCurrency(entry.paymentAmount, tenant.currency)}
-                            </td>
-                            <td className="text-right p-2 text-emerald-400">
-                              {formatCurrency(entry.principalAmount, tenant.currency)}
-                            </td>
-                            <td className="text-right p-2 text-amber-400">
-                              {formatCurrency(entry.interestAmount, tenant.currency)}
-                            </td>
-                            <td className="text-right p-2">
-                              {formatCurrency(entry.remainingBalance, tenant.currency)}
-                            </td>
+              {/* Amortization Schedule - only show if payment frequency is set */}
+              {loan.payment_frequency && (
+                <div>
+                  <button
+                    onClick={() => setShowSchedule(!showSchedule)}
+                    className="flex items-center justify-between w-full p-3 bg-slate-700/30 rounded-lg text-white hover:bg-slate-700/50 transition-colors"
+                  >
+                    <span className="font-medium">Amortization Schedule</span>
+                    {showSchedule ? (
+                      <ChevronUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4" />
+                    )}
+                  </button>
+                  
+                  {showSchedule && (
+                    <div className="mt-2 max-h-64 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="text-slate-400 sticky top-0 bg-slate-800">
+                          <tr>
+                            <th className="text-left p-2">#</th>
+                            <th className="text-left p-2">Date</th>
+                            <th className="text-right p-2">Payment</th>
+                            <th className="text-right p-2">Principal</th>
+                            <th className="text-right p-2">Interest</th>
+                            <th className="text-right p-2">Balance</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                        </thead>
+                        <tbody className="text-white">
+                          {amortizationSchedule.slice(0, 60).map((entry) => (
+                            <tr key={entry.paymentNumber} className="border-t border-slate-700">
+                              <td className="p-2">{entry.paymentNumber}</td>
+                              <td className="p-2">{entry.paymentDate.toLocaleDateString()}</td>
+                              <td className="text-right p-2">
+                                {formatCurrency(entry.paymentAmount, tenant.currency)}
+                              </td>
+                              <td className="text-right p-2 text-emerald-400">
+                                {formatCurrency(entry.principalAmount, tenant.currency)}
+                              </td>
+                              <td className="text-right p-2 text-amber-400">
+                                {formatCurrency(entry.interestAmount, tenant.currency)}
+                              </td>
+                              <td className="text-right p-2">
+                                {formatCurrency(entry.remainingBalance, tenant.currency)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Payment History */}
               <div>
@@ -554,6 +585,17 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Loan Drawer */}
+      <EditLoanDrawer
+        loan={loan}
+        open={editDrawerOpen}
+        onOpenChange={setEditDrawerOpen}
+        onSuccess={() => {
+          onOpenChange(false);
+          onUpdate?.();
+        }}
+      />
     </>
   );
 }
