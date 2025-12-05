@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { ArrowUpCircle, ArrowDownCircle, Receipt, BookOpen, Filter, Landmark } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowUpCircle, ArrowDownCircle, Receipt, BookOpen, Filter, Landmark, ExternalLink } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -11,6 +12,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
@@ -27,6 +36,10 @@ interface LedgerEntry {
   balance: number;
   accountId: string;
   accountName: string;
+  // Source IDs for navigation
+  billId?: string;
+  invoiceId?: string;
+  loanId?: string;
 }
 
 interface Transaction {
@@ -39,17 +52,22 @@ interface Transaction {
   invoice_id?: string;
   loan_payment_id?: string;
   account?: { name: string };
-  bill?: { bill_number?: string; vendor?: { name: string } };
-  invoice?: { invoice_number?: string; customer?: { name: string } };
-  loan_payment?: { loan?: { name: string; type: string } };
+  bill?: { id: string; bill_number?: string; vendor?: { name: string } };
+  invoice?: { id: string; invoice_number?: string; customer?: { name: string } };
+  loan_payment?: { id: string; loan_id: string; loan?: { id: string; name: string; type: string } };
 }
 
 export default function LedgerPage() {
   const { tenant } = useTenant();
+  const router = useRouter();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>('all');
   const [loading, setLoading] = useState(true);
+  
+  // Detail dialog for transactions without source
+  const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!tenant) return;
@@ -63,9 +81,9 @@ export default function LedgerPage() {
         .select(`
           *,
           account:accounts(name),
-          bill:bills(bill_number, vendor:contacts(name)),
-          invoice:invoices(invoice_number, customer:contacts(name)),
-          loan_payment:loan_payments(id, loan:loans(name, type))
+          bill:bills(id, bill_number, vendor:contacts(name)),
+          invoice:invoices(id, invoice_number, customer:contacts(name)),
+          loan_payment:loan_payments(id, loan_id, loan:loans(id, name, type))
         `)
         .eq('tenant_id', tenant.id)
         .order('date', { ascending: true })
@@ -112,22 +130,28 @@ export default function LedgerPage() {
       let reference = '';
       let referenceType: LedgerEntry['referenceType'];
       let description = tx.description || '';
+      let billId: string | undefined;
+      let invoiceId: string | undefined;
+      let loanId: string | undefined;
       
-      if (tx.bill?.bill_number) {
-        reference = `Bill #${tx.bill.bill_number}`;
+      if (tx.bill?.id) {
+        reference = tx.bill.bill_number ? `Bill #${tx.bill.bill_number}` : 'Bill';
         referenceType = 'bill';
+        billId = tx.bill.id;
         if (!description && tx.bill.vendor?.name) {
           description = `Payment to ${tx.bill.vendor.name}`;
         }
-      } else if (tx.invoice?.invoice_number) {
-        reference = `Inv #${tx.invoice.invoice_number}`;
+      } else if (tx.invoice?.id) {
+        reference = tx.invoice.invoice_number ? `Inv #${tx.invoice.invoice_number}` : 'Invoice';
         referenceType = 'invoice';
+        invoiceId = tx.invoice.id;
         if (!description && tx.invoice.customer?.name) {
           description = `Payment from ${tx.invoice.customer.name}`;
         }
-      } else if (tx.loan_payment?.loan?.name) {
+      } else if (tx.loan_payment?.loan?.id) {
         reference = tx.loan_payment.loan.name;
         referenceType = 'loan_payment';
+        loanId = tx.loan_payment.loan.id;
         if (!description) {
           description = tx.loan_payment.loan.type === 'payable' 
             ? 'Loan Payment (Out)'
@@ -136,6 +160,8 @@ export default function LedgerPage() {
       } else if (description?.startsWith('Loan received:') || description?.startsWith('Loan disbursed:')) {
         referenceType = 'loan';
         reference = description.replace('Loan received: ', '').replace('Loan disbursed: ', '');
+        // Note: For initial loan disbursements, we don't have the loan_id directly linked
+        // They would need to navigate to loans page to find it
       }
 
       if (!description) {
@@ -153,11 +179,33 @@ export default function LedgerPage() {
         balance: newBalance,
         accountId,
         accountName: tx.account?.name || 'Unknown',
+        billId,
+        invoiceId,
+        loanId,
       });
     });
 
     return entries;
   }, [transactions, accounts, selectedAccountId]);
+
+  // Handle entry click - navigate to source
+  const handleEntryClick = (entry: LedgerEntry) => {
+    if (entry.billId) {
+      // Navigate to bills page - the bill details would need to be opened there
+      router.push(`/bills?id=${entry.billId}`);
+    } else if (entry.invoiceId) {
+      router.push(`/invoices?id=${entry.invoiceId}`);
+    } else if (entry.loanId) {
+      router.push(`/loans?id=${entry.loanId}`);
+    } else if (entry.referenceType === 'loan') {
+      // Initial loan disbursement - go to loans page
+      router.push('/loans');
+    } else {
+      // No linked source - show detail dialog
+      setSelectedEntry(entry);
+      setDetailDialogOpen(true);
+    }
+  };
 
   // Calculate totals
   const totals = useMemo(() => {
@@ -205,6 +253,10 @@ export default function LedgerPage() {
     }
   };
 
+  const hasLink = (entry: LedgerEntry) => {
+    return entry.billId || entry.invoiceId || entry.loanId || entry.referenceType === 'loan';
+  };
+
   if (!tenant) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -222,7 +274,7 @@ export default function LedgerPage() {
             <BookOpen className="h-6 w-6 text-emerald-400" />
             General Ledger
           </h1>
-          <p className="text-slate-400 text-sm">Account transactions with running balances</p>
+          <p className="text-slate-400 text-sm">Tap any entry to view details</p>
         </div>
         
         {/* Account Filter */}
@@ -313,15 +365,24 @@ export default function LedgerPage() {
 
               {/* Transaction Entries */}
               {ledgerEntries.map((entry) => (
-                <div key={entry.id} className="p-3 hover:bg-slate-700/30 transition-colors">
+                <div 
+                  key={entry.id} 
+                  onClick={() => handleEntryClick(entry)}
+                  className="p-3 hover:bg-slate-700/30 transition-colors cursor-pointer active:bg-slate-700/50"
+                >
                   {/* Row 1: Date & Account (if showing all) */}
                   <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                     <span>{formatDate(entry.date)}</span>
-                    {selectedAccountId === 'all' && (
-                      <Badge variant="secondary" className="bg-slate-700 text-slate-300 text-xs">
-                        {entry.accountName}
-                      </Badge>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {selectedAccountId === 'all' && (
+                        <Badge variant="secondary" className="bg-slate-700 text-slate-300 text-xs">
+                          {entry.accountName}
+                        </Badge>
+                      )}
+                      {hasLink(entry) && (
+                        <ExternalLink className="h-3 w-3 text-slate-500" />
+                      )}
+                    </div>
                   </div>
                   
                   {/* Row 2: Description */}
@@ -421,7 +482,11 @@ export default function LedgerPage() {
                   </tr>
 
                   {ledgerEntries.map((entry) => (
-                    <tr key={entry.id} className="border-b border-slate-700 hover:bg-slate-700/30">
+                    <tr 
+                      key={entry.id} 
+                      onClick={() => handleEntryClick(entry)}
+                      className="border-b border-slate-700 hover:bg-slate-700/30 cursor-pointer"
+                    >
                       <td className="p-3 text-slate-300">{formatDate(entry.date)}</td>
                       {selectedAccountId === 'all' && (
                         <td className="p-3">
@@ -430,7 +495,14 @@ export default function LedgerPage() {
                           </Badge>
                         </td>
                       )}
-                      <td className="p-3 text-white">{entry.description}</td>
+                      <td className="p-3 text-white">
+                        <div className="flex items-center gap-2">
+                          {entry.description}
+                          {hasLink(entry) && (
+                            <ExternalLink className="h-3 w-3 text-slate-500" />
+                          )}
+                        </div>
+                      </td>
                       <td className="p-3">
                         {entry.reference && (
                           <Badge variant="outline" className={getReferenceColor(entry.referenceType)}>
@@ -474,8 +546,70 @@ export default function LedgerPage() {
       </div>
 
       <p className="text-center text-slate-500 text-xs mt-4">
-        Debits = Cash out • Credits = Cash in • All loans and payments recorded here
+        Debits = Cash out • Credits = Cash in • Tap entry to view source
       </p>
+
+      {/* Transaction Detail Dialog (for entries without source) */}
+      <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle>Transaction Details</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Direct transaction without linked document
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedEntry && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-slate-400 text-sm">Date</p>
+                  <p className="text-white font-medium">{formatDate(selectedEntry.date)}</p>
+                </div>
+                <div>
+                  <p className="text-slate-400 text-sm">Account</p>
+                  <p className="text-white font-medium">{selectedEntry.accountName}</p>
+                </div>
+              </div>
+              
+              <div>
+                <p className="text-slate-400 text-sm">Description</p>
+                <p className="text-white font-medium">{selectedEntry.description}</p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-3 bg-slate-700/30 rounded-lg">
+                  <p className="text-slate-400 text-sm">Debit (Out)</p>
+                  <p className="text-red-400 font-bold text-lg">
+                    {selectedEntry.debit > 0 
+                      ? formatCurrency(selectedEntry.debit, tenant.currency) 
+                      : '—'}
+                  </p>
+                </div>
+                <div className="p-3 bg-slate-700/30 rounded-lg">
+                  <p className="text-slate-400 text-sm">Credit (In)</p>
+                  <p className="text-green-400 font-bold text-lg">
+                    {selectedEntry.credit > 0 
+                      ? formatCurrency(selectedEntry.credit, tenant.currency) 
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+              
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                <p className="text-slate-400 text-sm">Balance After</p>
+                <p className={`font-bold text-lg ${selectedEntry.balance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatCurrency(selectedEntry.balance, tenant.currency)}
+                </p>
+              </div>
+              
+              <p className="text-slate-500 text-xs text-center">
+                This transaction is not linked to a bill, invoice, or loan.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

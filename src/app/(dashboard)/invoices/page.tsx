@@ -1,18 +1,38 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { Plus, FileText, Send, Clock, CheckCircle, FileEdit } from 'lucide-react';
+import { Plus, FileText, Send, Clock, CheckCircle, FileEdit, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { DateInput } from '@/components/ui/date-input';
 import { useTenant } from '@/hooks/use-tenant';
 import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { CreateInvoiceDialog } from '@/features/invoicing/create-invoice-dialog';
-import type { Invoice, InvoiceLine, Contact } from '@/lib/supabase/types';
+import { toast } from 'sonner';
+import type { Invoice, InvoiceLine, Contact, Account } from '@/lib/supabase/types';
 
 // Dynamically import PDF component to avoid SSR issues
 const InvoicePDFDownloadButton = dynamic(
@@ -38,10 +58,24 @@ interface InvoiceWithDetails extends Invoice {
 export default function InvoicesPage() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [invoices, setInvoices] = useState<InvoiceWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'draft' | 'sent' | 'partial' | 'paid'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
+  
+  // Payment dialog state
+  const [selectedInvoice, setSelectedInvoice] = useState<InvoiceWithDetails | null>(null);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [paymentAmount, setPaymentAmount] = useState(0);
+  const [paymentAccountId, setPaymentAccountId] = useState('');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [savingPayment, setSavingPayment] = useState(false);
+
+  // Handle URL query param to open specific invoice
+  const invoiceIdFromUrl = searchParams.get('id');
 
   const loadInvoices = useCallback(async () => {
     if (!tenant) return;
@@ -86,6 +120,84 @@ export default function InvoicesPage() {
   useEffect(() => {
     loadInvoices();
   }, [loadInvoices]);
+
+  // Load accounts for payment dialog
+  useEffect(() => {
+    if (!tenant) return;
+    const loadAccounts = async () => {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from('accounts')
+        .select('*')
+        .eq('tenant_id', tenant.id)
+        .order('name');
+      setAccounts((data || []) as Account[]);
+    };
+    loadAccounts();
+  }, [tenant]);
+
+  // Open invoice from URL param
+  useEffect(() => {
+    if (invoiceIdFromUrl && invoices.length > 0 && !loading) {
+      const invoice = invoices.find(i => i.id === invoiceIdFromUrl);
+      if (invoice) {
+        setSelectedInvoice(invoice);
+        setPaymentDialogOpen(true);
+        setPaymentAmount(invoice.total_amount);
+        // Clear the URL param
+        router.replace('/invoices', { scroll: false });
+      }
+    }
+  }, [invoiceIdFromUrl, invoices, loading, router]);
+
+  const handleRecordPayment = (invoice: InvoiceWithDetails) => {
+    setSelectedInvoice(invoice);
+    setPaymentAmount(invoice.total_amount);
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentAccountId('');
+    setPaymentDialogOpen(true);
+  };
+
+  const handleSavePayment = async () => {
+    if (!selectedInvoice || !tenant || !paymentAccountId) {
+      toast.error('Please select an account');
+      return;
+    }
+
+    setSavingPayment(true);
+    const supabase = createClient();
+
+    try {
+      // Create transaction (positive amount = income)
+      const { error: txError } = await supabase.from('transactions').insert({
+        tenant_id: tenant.id,
+        account_id: paymentAccountId,
+        invoice_id: selectedInvoice.id,
+        date: paymentDate,
+        amount: paymentAmount, // Positive for income
+        description: `Payment for Invoice ${selectedInvoice.invoice_number || selectedInvoice.id.slice(0, 8)}`,
+        status: 'cleared',
+      });
+
+      if (txError) throw txError;
+
+      // Update invoice status
+      const newStatus = paymentAmount >= selectedInvoice.total_amount ? 'paid' : 'partial';
+      await supabase
+        .from('invoices')
+        .update({ status: newStatus })
+        .eq('id', selectedInvoice.id);
+
+      toast.success('Payment recorded');
+      setPaymentDialogOpen(false);
+      loadInvoices();
+    } catch (error) {
+      console.error('Error recording payment:', error);
+      toast.error('Failed to record payment');
+    } finally {
+      setSavingPayment(false);
+    }
+  };
 
   const filteredInvoices = invoices.filter((invoice) => {
     if (filter === 'all') return true;
@@ -224,6 +336,16 @@ export default function InvoicesPage() {
                           Mark as Sent
                         </Button>
                       )}
+                      {(invoice.status === 'sent' || invoice.status === 'partial') && canWrite && (
+                        <Button
+                          size="sm"
+                          onClick={() => handleRecordPayment(invoice)}
+                          className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                        >
+                          <DollarSign className="mr-1 h-3 w-3" />
+                          Record Payment
+                        </Button>
+                      )}
                       {invoice.lines && invoice.lines.length > 0 && (
                         <InvoicePDFDownloadButton
                           invoice={invoice}
@@ -247,6 +369,89 @@ export default function InvoicesPage() {
         onOpenChange={setDialogOpen}
         onSuccess={loadInvoices}
       />
+
+      {/* Record Payment Dialog */}
+      <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-emerald-400" />
+              Record Payment
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {selectedInvoice && (
+                <>Record payment for Invoice {selectedInvoice.invoice_number || `#${selectedInvoice.id.slice(0, 8)}`}</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedInvoice && (
+            <div className="space-y-4">
+              <div className="p-3 bg-slate-700/30 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Invoice Total</span>
+                  <span className="text-white font-bold">
+                    {formatCurrency(selectedInvoice.total_amount, tenant.currency)}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-slate-300">Payment Date</Label>
+                <DateInput
+                  value={paymentDate}
+                  onChange={setPaymentDate}
+                  className="mt-1 bg-slate-700/50 border-slate-600 text-white"
+                />
+              </div>
+
+              <div>
+                <Label className="text-slate-300">Amount Received</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                  className="mt-1 bg-slate-700/50 border-slate-600 text-white"
+                />
+              </div>
+
+              <div>
+                <Label className="text-slate-300">Deposit To Account</Label>
+                <Select value={paymentAccountId} onValueChange={setPaymentAccountId}>
+                  <SelectTrigger className="mt-1 bg-slate-700/50 border-slate-600 text-white">
+                    <SelectValue placeholder="Select account" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-700">
+                    {accounts.map((acc) => (
+                      <SelectItem key={acc.id} value={acc.id} className="text-white">
+                        {acc.name} ({formatCurrency(acc.balance, tenant.currency)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPaymentDialogOpen(false)}
+              className="border-slate-600 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSavePayment}
+              disabled={savingPayment || paymentAmount <= 0 || !paymentAccountId}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              {savingPayment ? 'Recording...' : 'Record Payment'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

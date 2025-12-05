@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Landmark, TrendingDown, TrendingUp, Calendar, Percent } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,12 +18,17 @@ import type { Loan, Contact } from '@/lib/supabase/types';
 export default function LoansPage() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [loans, setLoans] = useState<(Loan & { contact?: Contact })[]>([]);
   const [loading, setLoading] = useState(true);
   const [addDrawerOpen, setAddDrawerOpen] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'payable' | 'receivable'>('all');
+
+  // Handle URL query param to open specific loan
+  const loanIdFromUrl = searchParams.get('id');
 
   const loadLoans = async () => {
     if (!tenant) return;
@@ -47,6 +53,19 @@ export default function LoansPage() {
   useEffect(() => {
     loadLoans();
   }, [tenant]);
+
+  // Open loan from URL param
+  useEffect(() => {
+    if (loanIdFromUrl && loans.length > 0 && !loading) {
+      const loan = loans.find(l => l.id === loanIdFromUrl);
+      if (loan) {
+        setSelectedLoan(loan);
+        setDetailsDrawerOpen(true);
+        // Clear the URL param
+        router.replace('/loans', { scroll: false });
+      }
+    }
+  }, [loanIdFromUrl, loans, loading, router]);
 
   const filteredLoans = loans.filter(loan => {
     if (filter === 'all') return true;

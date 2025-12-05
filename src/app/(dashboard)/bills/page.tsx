@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Receipt, Clock, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -24,6 +25,8 @@ const statusConfig = {
 export default function BillsPage() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [bills, setBills] = useState<Bill[]>([]);
   const [payments, setPayments] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
@@ -32,6 +35,9 @@ export default function BillsPage() {
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [addBillDrawerOpen, setAddBillDrawerOpen] = useState(false);
   const [editBillDrawerOpen, setEditBillDrawerOpen] = useState(false);
+
+  // Handle URL query param to open specific bill
+  const billIdFromUrl = searchParams.get('id');
 
   const loadBills = useCallback(async () => {
     if (!tenant) return;
@@ -72,6 +78,19 @@ export default function BillsPage() {
   useEffect(() => {
     loadBills();
   }, [loadBills]);
+
+  // Open bill from URL param
+  useEffect(() => {
+    if (billIdFromUrl && bills.length > 0 && !loading) {
+      const bill = bills.find(b => b.id === billIdFromUrl);
+      if (bill) {
+        setSelectedBill(bill);
+        setEditBillDrawerOpen(true);
+        // Clear the URL param
+        router.replace('/bills', { scroll: false });
+      }
+    }
+  }, [billIdFromUrl, bills, loading, router]);
 
   const filteredBills = bills.filter((bill) => {
     if (filter === 'all') return true;
