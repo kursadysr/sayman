@@ -166,7 +166,11 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     const supabase = createClient();
 
     try {
+      console.log('handleRecordPayment called');
+      console.log('loan.remaining_balance:', loan.remaining_balance);
+      console.log('paymentPrincipal:', paymentPrincipal);
       const newBalance = Math.round((loan.remaining_balance - paymentPrincipal) * 100) / 100;
+      console.log('newBalance after payment:', newBalance);
 
       // 1. Create loan payment record
       const { data: loanPayment, error: paymentError } = await supabase
