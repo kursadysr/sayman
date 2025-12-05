@@ -166,15 +166,7 @@ USING (
 
 ---
 
-## 9. Bug Fixes
-
-### A. Loan Payment Duplicate Transaction Fix
-- Initial fix: Added a conditional check (`if (loan.remaining_balance > 0)`) before inserting a transaction record for loan payments in `src/features/loans/loan-details-drawer.tsx` to prevent duplicate debit transactions when a loan's remaining balance reaches zero.
-- Follow-up fix: Refactored the `txError` declaration in `src/features/loans/loan-details-drawer.tsx` to be outside the conditional block. This ensures `txError` is always accessible, resolving the "txError is not defined" error and allowing proper error handling for transaction creation.
-
----
-
-## 10. UI/UX Principles
+## 8. UI/UX Principles
 
 - **Keep it easy** - One item entry works for simple expenses
 - **Always itemized** - No toggle between total/items
