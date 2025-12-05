@@ -235,7 +235,7 @@ export interface LoanPayment {
   total_amount: number;
   principal_amount: number;
   interest_amount: number;
-  remaining_balance: number;
+  remaining_balance?: number; // Optional - calculated dynamically in UI
   notes: string | null;
   created_at: string;
   account?: Account;
@@ -333,7 +333,6 @@ export interface CreateLoanPaymentInput {
   total_amount: number;
   principal_amount: number;
   interest_amount: number;
-  remaining_balance: number;
   notes?: string;
 }
 

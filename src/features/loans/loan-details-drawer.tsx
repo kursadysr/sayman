@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Landmark, Calendar, Percent, DollarSign, TrendingDown, TrendingUp,
   Plus, Trash2, ChevronDown, ChevronUp, Pencil
@@ -52,6 +52,11 @@ interface LoanDetailsDrawerProps {
   onUpdate?: () => void;
 }
 
+// Payment with calculated running balance
+interface PaymentWithBalance extends LoanPayment {
+  calculatedBalance: number;
+}
+
 export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDetailsDrawerProps) {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
@@ -71,6 +76,40 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   const [paymentNotes, setPaymentNotes] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
   const [customSplit, setCustomSplit] = useState(false);
+
+  // Calculate remaining balance dynamically from payments
+  const { remainingBalance, totalPaidPrincipal, totalPaidInterest, paymentsWithBalance } = useMemo(() => {
+    if (!loan) return { remainingBalance: 0, totalPaidPrincipal: 0, totalPaidInterest: 0, paymentsWithBalance: [] };
+    
+    // Sort payments by date ascending for calculation
+    const sortedPayments = [...payments].sort((a, b) => 
+      new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime()
+    );
+    
+    let balance = loan.principal_amount;
+    let totalPrincipal = 0;
+    let totalInterest = 0;
+    
+    const withBalance: PaymentWithBalance[] = sortedPayments.map(payment => {
+      balance -= payment.principal_amount;
+      totalPrincipal += payment.principal_amount;
+      totalInterest += payment.interest_amount;
+      return {
+        ...payment,
+        calculatedBalance: Math.max(0, balance)
+      };
+    });
+    
+    // Reverse for display (newest first)
+    withBalance.reverse();
+    
+    return { 
+      remainingBalance: Math.max(0, balance), 
+      totalPaidPrincipal: totalPrincipal,
+      totalPaidInterest: totalInterest,
+      paymentsWithBalance: withBalance 
+    };
+  }, [loan, payments]);
 
   // Load payments and accounts
   useEffect(() => {
@@ -106,7 +145,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     if (paymentDialogOpen && loan) {
       if (loan.payment_frequency) {
         const suggested = calculateNextPayment(
-          loan.remaining_balance,
+          remainingBalance,
           loan.interest_rate,
           loan.payment_frequency as PaymentFrequency,
           loan.monthly_payment || 0
@@ -116,8 +155,8 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
         setPaymentInterest(suggested.interest);
       } else {
         // No payment frequency - default to remaining balance
-        setPaymentTotal(loan.remaining_balance);
-        setPaymentPrincipal(loan.remaining_balance);
+        setPaymentTotal(remainingBalance);
+        setPaymentPrincipal(remainingBalance);
         setPaymentInterest(0);
       }
       setPaymentDate(new Date().toISOString().split('T')[0]);
@@ -125,14 +164,14 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       setPaymentNotes('');
       setCustomSplit(false);
     }
-  }, [paymentDialogOpen, loan]);
+  }, [paymentDialogOpen, loan, remainingBalance]);
 
   // Update principal/interest when total changes (auto-calculate unless custom split)
   const handleTotalChange = (total: number) => {
     setPaymentTotal(total);
     if (loan && !customSplit) {
       const interest = Math.min(
-        Math.round(loan.remaining_balance * (loan.interest_rate / 12) * 100) / 100,
+        Math.round(remainingBalance * (loan.interest_rate / 12) * 100) / 100,
         total
       );
       setPaymentInterest(interest);
@@ -146,7 +185,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     if (!enabled && loan) {
       // Recalculate based on current total
       const interest = Math.min(
-        Math.round(loan.remaining_balance * (loan.interest_rate / 12) * 100) / 100,
+        Math.round(remainingBalance * (loan.interest_rate / 12) * 100) / 100,
         paymentTotal
       );
       setPaymentInterest(interest);
@@ -167,10 +206,8 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     const supabase = createClient();
 
     try {
-      const newBalance = Math.round((loan.remaining_balance - paymentPrincipal) * 100) / 100;
-
-      // 1. Create loan payment record
-      const { data: loanPayment, error: paymentError } = await supabase
+      // Create loan payment record (no remaining_balance stored)
+      const { error: paymentError } = await supabase
         .from('loan_payments')
         .insert({
           loan_id: loan.id,
@@ -180,15 +217,10 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
           total_amount: paymentTotal,
           principal_amount: paymentPrincipal,
           interest_amount: paymentInterest,
-          remaining_balance: Math.max(0, newBalance),
           notes: paymentNotes || null,
-        })
-        .select()
-        .single();
+        });
 
       if (paymentError) throw paymentError;
-
-      // Transaction is created automatically by database trigger (create_loan_payment_transaction_trigger)
 
       toast.success('Payment recorded');
       setPaymentDialogOpen(false);
@@ -241,7 +273,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
 
   if (!loan || !tenant) return null;
 
-  const progressPercent = ((loan.principal_amount - loan.remaining_balance) / loan.principal_amount) * 100;
+  const progressPercent = ((loan.principal_amount - remainingBalance) / loan.principal_amount) * 100;
   const amortizationSchedule = loan.payment_frequency 
     ? generateAmortizationSchedule(
         loan.principal_amount,
@@ -283,7 +315,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    {loan.status === 'active' && (
+                    {remainingBalance > 0 && (
                       <Button
                         size="sm"
                         onClick={() => setPaymentDialogOpen(true)}
@@ -304,14 +336,12 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 <Badge 
                   variant="secondary" 
                   className={
-                    loan.status === 'active' 
+                    remainingBalance > 0
                       ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                      : loan.status === 'paid_off'
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                      : 'bg-red-500/10 text-red-400 border-red-500/20'
+                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                   }
                 >
-                  {loan.status === 'active' ? 'Active' : loan.status === 'paid_off' ? 'Paid Off' : 'Defaulted'}
+                  {remainingBalance > 0 ? 'Active' : 'Paid Off'}
                 </Badge>
               </div>
 
@@ -321,7 +351,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 <div className={`text-3xl font-bold ${
                   loan.type === 'payable' ? 'text-red-400' : 'text-emerald-400'
                 }`}>
-                  {formatCurrency(loan.remaining_balance, tenant.currency)}
+                  {formatCurrency(remainingBalance, tenant.currency)}
                 </div>
                 <div className="text-sm text-slate-500 mt-1">
                   of {formatCurrency(loan.principal_amount, tenant.currency)} principal
@@ -338,7 +368,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                       className={`h-full rounded-full ${
                         loan.type === 'payable' ? 'bg-red-400' : 'bg-emerald-400'
                       }`}
-                      style={{ width: `${progressPercent}%` }}
+                      style={{ width: `${Math.min(100, progressPercent)}%` }}
                     />
                   </div>
                 </div>
@@ -393,18 +423,18 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 </div>
               </div>
 
-              {/* Totals */}
+              {/* Totals - Calculated dynamically */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
                   <div className="text-sm text-emerald-400 mb-1">Total Principal Paid</div>
                   <div className="text-xl font-bold text-white">
-                    {formatCurrency(loan.total_paid_principal, tenant.currency)}
+                    {formatCurrency(totalPaidPrincipal, tenant.currency)}
                   </div>
                 </div>
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                   <div className="text-sm text-amber-400 mb-1">Total Interest Paid</div>
                   <div className="text-xl font-bold text-white">
-                    {formatCurrency(loan.total_paid_interest, tenant.currency)}
+                    {formatCurrency(totalPaidInterest, tenant.currency)}
                   </div>
                 </div>
               </div>
@@ -468,14 +498,14 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 <h3 className="text-lg font-medium text-white mb-3">Payment History</h3>
                 {loading ? (
                   <div className="text-slate-400 text-center py-4">Loading...</div>
-                ) : payments.length === 0 ? (
+                ) : paymentsWithBalance.length === 0 ? (
                   <div className="text-slate-400 text-center py-8">
                     <DollarSign className="h-12 w-12 mx-auto mb-4 text-slate-600" />
                     <p>No payments recorded yet</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {payments.map((payment) => (
+                    {paymentsWithBalance.map((payment) => (
                       <div
                         key={payment.id}
                         className="p-3 bg-slate-700/30 rounded-lg flex items-center justify-between group"
@@ -498,7 +528,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-500">
-                            Bal: {formatCurrency(payment.remaining_balance, tenant.currency)}
+                            Bal: {formatCurrency(payment.calculatedBalance, tenant.currency)}
                           </span>
                           {canWrite && (
                             <Button
@@ -541,7 +571,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                 <DateInput
                   value={paymentDate}
                   onChange={(value) => setPaymentDate(value)}
-                  className="mt-1 bg-slate-700/50 border-slate-600 text-white"
+                  className="mt-1"
                 />
               </div>
               <div>
@@ -633,7 +663,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
               <div className="flex justify-between items-center">
                 <span className="text-sm text-slate-400">Balance after payment</span>
                 <span className="text-lg font-bold text-white">
-                  {formatCurrency(Math.max(0, loan.remaining_balance - paymentPrincipal), tenant.currency)}
+                  {formatCurrency(Math.max(0, remainingBalance - paymentPrincipal), tenant.currency)}
                 </span>
               </div>
             </div>
@@ -671,4 +701,3 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     </>
   );
 }
-
