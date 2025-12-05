@@ -76,6 +76,10 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   const [paymentNotes, setPaymentNotes] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
   const [customSplit, setCustomSplit] = useState(false);
+  
+  // Edit payment state
+  const [editPaymentDialogOpen, setEditPaymentDialogOpen] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<LoanPayment | null>(null);
 
   // Calculate remaining balance dynamically from payments
   const { remainingBalance, totalPaidPrincipal, totalPaidInterest, paymentsWithBalance } = useMemo(() => {
@@ -268,6 +272,65 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     } catch (error) {
       console.error('Error deleting payment:', error);
       toast.error('Failed to delete payment');
+    }
+  };
+
+  const handleEditPayment = (payment: LoanPayment) => {
+    setEditingPayment(payment);
+    setPaymentDate(payment.payment_date);
+    setPaymentTotal(payment.total_amount);
+    setPaymentPrincipal(payment.principal_amount);
+    setPaymentInterest(payment.interest_amount);
+    setPaymentAccountId(payment.account_id);
+    setPaymentNotes(payment.notes || '');
+    setCustomSplit(false); // Start with auto-calculate
+    setEditPaymentDialogOpen(true);
+  };
+
+  const handleUpdatePayment = async () => {
+    if (!loan || !tenant || !editingPayment) return;
+
+    if (!paymentAccountId) {
+      toast.error('Please select an account');
+      return;
+    }
+
+    setSavingPayment(true);
+    const supabase = createClient();
+
+    try {
+      const { error } = await supabase
+        .from('loan_payments')
+        .update({
+          account_id: paymentAccountId,
+          payment_date: paymentDate,
+          total_amount: paymentTotal,
+          principal_amount: paymentPrincipal,
+          interest_amount: paymentInterest,
+          notes: paymentNotes || null,
+        })
+        .eq('id', editingPayment.id);
+
+      if (error) throw error;
+
+      toast.success('Payment updated');
+      setEditPaymentDialogOpen(false);
+      setEditingPayment(null);
+      onUpdate?.();
+
+      // Reload payments
+      const { data: updatedPayments } = await supabase
+        .from('loan_payments')
+        .select('*, account:accounts(name)')
+        .eq('loan_id', loan.id)
+        .order('payment_date', { ascending: false });
+
+      setPayments((updatedPayments || []) as LoanPayment[]);
+    } catch (error) {
+      console.error('Error updating payment:', error);
+      toast.error('Failed to update payment');
+    } finally {
+      setSavingPayment(false);
     }
   };
 
@@ -527,14 +590,24 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                             Bal: {formatCurrency(payment.calculatedBalance, tenant.currency)}
                           </span>
                           {canWrite && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDeletePayment(payment.id)}
-                              className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 h-7 w-7"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleEditPayment(payment)}
+                                className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-300 h-7 w-7"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeletePayment(payment.id)}
+                                className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 h-7 w-7"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -694,6 +767,146 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
           onUpdate?.();
         }}
       />
+
+      {/* Edit Payment Dialog */}
+      <Dialog open={editPaymentDialogOpen} onOpenChange={(open) => {
+        setEditPaymentDialogOpen(open);
+        if (!open) setEditingPayment(null);
+      }}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5" />
+              Edit Payment
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Update payment details
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-slate-300">Payment Date</Label>
+                <DateInput
+                  value={paymentDate}
+                  onChange={(value) => setPaymentDate(value)}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label className="text-slate-300">Total Payment</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={paymentTotal}
+                  onChange={(e) => handleTotalChange(parseFloat(e.target.value) || 0)}
+                  className="mt-1 bg-slate-700/50 border-slate-600 text-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-slate-300">
+                {loan.type === 'payable' ? 'Paid From Account' : 'Received To Account'}
+              </Label>
+              <Select value={paymentAccountId} onValueChange={setPaymentAccountId}>
+                <SelectTrigger className="mt-1 bg-slate-700/50 border-slate-600 text-white">
+                  <SelectValue placeholder="Select account" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  {accounts.map((acc) => (
+                    <SelectItem key={acc.id} value={acc.id} className="text-white">
+                      {acc.name} ({formatCurrency(acc.balance, tenant.currency)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Calculated breakdown */}
+            <div className="p-3 bg-slate-700/30 rounded-lg space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-400">Payment breakdown</span>
+                <button
+                  type="button"
+                  onClick={() => handleCustomSplitToggle(!customSplit)}
+                  className="text-xs text-emerald-400 hover:text-emerald-300"
+                >
+                  {customSplit ? 'Auto calculate' : 'Adjust split'}
+                </button>
+              </div>
+              
+              {customSplit ? (
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div>
+                    <Label className="text-xs text-slate-400">Principal</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={paymentPrincipal}
+                      onChange={(e) => setPaymentPrincipal(parseFloat(e.target.value) || 0)}
+                      className="mt-1 h-8 bg-slate-700/50 border-slate-600 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-slate-400">Interest</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={paymentInterest}
+                      onChange={(e) => setPaymentInterest(parseFloat(e.target.value) || 0)}
+                      className="mt-1 h-8 bg-slate-700/50 border-slate-600 text-white text-sm"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex justify-between text-sm">
+                  <div>
+                    <span className="text-slate-400">Principal: </span>
+                    <span className="text-emerald-400 font-medium">
+                      {formatCurrency(paymentPrincipal, tenant.currency)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Interest: </span>
+                    <span className="text-amber-400 font-medium">
+                      {formatCurrency(paymentInterest, tenant.currency)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Label className="text-slate-300">Notes (optional)</Label>
+              <Input
+                value={paymentNotes}
+                onChange={(e) => setPaymentNotes(e.target.value)}
+                placeholder="Payment notes..."
+                className="mt-1 bg-slate-700/50 border-slate-600 text-white"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditPaymentDialogOpen(false)}
+              className="border-slate-600 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdatePayment}
+              disabled={savingPayment || paymentTotal <= 0}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              {savingPayment ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
