@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Landmark, TrendingDown, TrendingUp, Calendar, Percent } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,13 @@ import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import { AddLoanDrawer } from '@/features/loans/add-loan-drawer';
 import { LoanDetailsDrawer } from '@/features/loans/loan-details-drawer';
-import type { Loan, Contact } from '@/lib/supabase/types';
+import type { Loan, Contact, LoanPayment } from '@/lib/supabase/types';
+
+// Loan with calculated remaining balance
+interface LoanWithBalance extends Loan {
+  contact?: Contact;
+  calculatedRemainingBalance: number;
+}
 
 export default function LoansPage() {
   const { tenant } = useTenant();
@@ -21,6 +27,7 @@ export default function LoansPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [loans, setLoans] = useState<(Loan & { contact?: Contact })[]>([]);
+  const [payments, setPayments] = useState<LoanPayment[]>([]);
   const [loading, setLoading] = useState(true);
   const [addDrawerOpen, setAddDrawerOpen] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
@@ -36,19 +43,43 @@ export default function LoansPage() {
     setLoading(true);
     const supabase = createClient();
 
-    const { data, error } = await supabase
-      .from('loans')
-      .select('*, contact:contacts(*)')
-      .eq('tenant_id', tenant.id)
-      .order('created_at', { ascending: false });
+    // Fetch loans and all payments in parallel
+    const [loansRes, paymentsRes] = await Promise.all([
+      supabase
+        .from('loans')
+        .select('*, contact:contacts(*)')
+        .eq('tenant_id', tenant.id)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('loan_payments')
+        .select('loan_id, principal_amount')
+        .eq('tenant_id', tenant.id)
+    ]);
 
-    if (error) {
-      console.error('Error loading loans:', error);
+    if (loansRes.error) {
+      console.error('Error loading loans:', loansRes.error);
     } else {
-      setLoans(data || []);
+      setLoans(loansRes.data || []);
     }
+    
+    setPayments((paymentsRes.data || []) as LoanPayment[]);
     setLoading(false);
   };
+
+  // Calculate remaining balance dynamically for each loan
+  const loansWithBalance: LoanWithBalance[] = useMemo(() => {
+    return loans.map(loan => {
+      // Sum all principal payments for this loan
+      const totalPaidPrincipal = payments
+        .filter(p => p.loan_id === loan.id)
+        .reduce((sum, p) => sum + Number(p.principal_amount), 0);
+      
+      return {
+        ...loan,
+        calculatedRemainingBalance: Math.max(0, Number(loan.principal_amount) - totalPaidPrincipal)
+      };
+    });
+  }, [loans, payments]);
 
   useEffect(() => {
     loadLoans();
@@ -56,8 +87,8 @@ export default function LoansPage() {
 
   // Open loan from URL param
   useEffect(() => {
-    if (loanIdFromUrl && loans.length > 0 && !loading) {
-      const loan = loans.find(l => l.id === loanIdFromUrl);
+    if (loanIdFromUrl && loansWithBalance.length > 0 && !loading) {
+      const loan = loansWithBalance.find(l => l.id === loanIdFromUrl);
       if (loan) {
         setSelectedLoan(loan);
         setDetailsDrawerOpen(true);
@@ -65,23 +96,24 @@ export default function LoansPage() {
         router.replace('/loans', { scroll: false });
       }
     }
-  }, [loanIdFromUrl, loans, loading, router]);
+  }, [loanIdFromUrl, loansWithBalance, loading, router]);
 
-  const filteredLoans = loans.filter(loan => {
+  const filteredLoans = loansWithBalance.filter(loan => {
     if (filter === 'all') return true;
     return loan.type === filter;
   });
 
-  const activeLoans = filteredLoans.filter(l => l.status === 'active');
-  const paidOffLoans = filteredLoans.filter(l => l.status === 'paid_off');
+  // Use calculated balance to determine active/paid off status
+  const activeLoans = filteredLoans.filter(l => l.calculatedRemainingBalance > 0);
+  const paidOffLoans = filteredLoans.filter(l => l.calculatedRemainingBalance <= 0);
 
-  const totalPayable = loans
-    .filter(l => l.type === 'payable' && l.status === 'active')
-    .reduce((sum, l) => sum + l.remaining_balance, 0);
+  const totalPayable = loansWithBalance
+    .filter(l => l.type === 'payable' && l.calculatedRemainingBalance > 0)
+    .reduce((sum, l) => sum + l.calculatedRemainingBalance, 0);
 
-  const totalReceivable = loans
-    .filter(l => l.type === 'receivable' && l.status === 'active')
-    .reduce((sum, l) => sum + l.remaining_balance, 0);
+  const totalReceivable = loansWithBalance
+    .filter(l => l.type === 'receivable' && l.calculatedRemainingBalance > 0)
+    .reduce((sum, l) => sum + l.calculatedRemainingBalance, 0);
 
   const handleLoanClick = (loan: Loan) => {
     setSelectedLoan(loan);
@@ -128,7 +160,7 @@ export default function LoansPage() {
               {formatCurrency(totalPayable, tenant.currency)}
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              {loans.filter(l => l.type === 'payable' && l.status === 'active').length} active loan(s)
+              {loansWithBalance.filter(l => l.type === 'payable' && l.calculatedRemainingBalance > 0).length} active loan(s)
             </p>
           </CardContent>
         </Card>
@@ -145,7 +177,7 @@ export default function LoansPage() {
               {formatCurrency(totalReceivable, tenant.currency)}
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              {loans.filter(l => l.type === 'receivable' && l.status === 'active').length} active loan(s)
+              {loansWithBalance.filter(l => l.type === 'receivable' && l.calculatedRemainingBalance > 0).length} active loan(s)
             </p>
           </CardContent>
         </Card>
@@ -241,24 +273,23 @@ export default function LoansPage() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className={`text-lg font-bold ${
-                          loan.type === 'payable' ? 'text-red-400' : 'text-emerald-400'
-                        }`}>
-                          {formatCurrency(loan.remaining_balance, tenant.currency)}
+                        <div className="text-lg font-bold text-white">
+                          {formatCurrency(loan.calculatedRemainingBalance, tenant.currency)}
                         </div>
                         <div className="text-xs text-slate-500">
-                          of {formatCurrency(loan.principal_amount, tenant.currency)}
+                          of {formatCurrency(Number(loan.principal_amount), tenant.currency)}
                         </div>
-                        {/* Progress bar */}
+                        {/* Progress bar - green for positive progress */}
                         <div className="w-24 h-1.5 bg-slate-700 rounded-full mt-2 ml-auto">
                           <div 
-                            className={`h-full rounded-full ${
-                              loan.type === 'payable' ? 'bg-red-400' : 'bg-emerald-400'
-                            }`}
+                            className="h-full rounded-full bg-emerald-400"
                             style={{ 
-                              width: `${((loan.principal_amount - loan.remaining_balance) / loan.principal_amount) * 100}%` 
+                              width: `${Math.min(100, ((Number(loan.principal_amount) - loan.calculatedRemainingBalance) / Number(loan.principal_amount)) * 100)}%` 
                             }}
                           />
+                        </div>
+                        <div className="text-xs text-emerald-400 mt-1">
+                          {((Number(loan.principal_amount) - loan.calculatedRemainingBalance) / Number(loan.principal_amount) * 100).toFixed(0)}% paid
                         </div>
                       </div>
                     </div>

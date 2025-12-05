@@ -348,26 +348,22 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
               {/* Balance Card */}
               <div className="p-4 bg-slate-700/30 rounded-lg">
                 <div className="text-sm text-slate-400 mb-1">Remaining Balance</div>
-                <div className={`text-3xl font-bold ${
-                  loan.type === 'payable' ? 'text-red-400' : 'text-emerald-400'
-                }`}>
+                <div className="text-3xl font-bold text-white">
                   {formatCurrency(remainingBalance, tenant.currency)}
                 </div>
                 <div className="text-sm text-slate-500 mt-1">
                   of {formatCurrency(loan.principal_amount, tenant.currency)} principal
                 </div>
                 
-                {/* Progress Bar */}
+                {/* Progress Bar - Green for positive vibe */}
                 <div className="mt-3">
-                  <div className="flex justify-between text-xs text-slate-400 mb-1">
-                    <span>Progress</span>
-                    <span>{progressPercent.toFixed(1)}% paid</span>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-slate-400">Progress</span>
+                    <span className="text-emerald-400 font-medium">{progressPercent.toFixed(1)}% paid</span>
                   </div>
                   <div className="h-2 bg-slate-700 rounded-full">
                     <div 
-                      className={`h-full rounded-full ${
-                        loan.type === 'payable' ? 'bg-red-400' : 'bg-emerald-400'
-                      }`}
+                      className="h-full rounded-full bg-emerald-400"
                       style={{ width: `${Math.min(100, progressPercent)}%` }}
                     />
                   </div>

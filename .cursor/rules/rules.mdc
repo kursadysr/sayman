@@ -2,6 +2,7 @@
 alwaysApply: true
 ---
 Mobile UI first design.
+It is a professional accounting app under the hood with non expert user friendly UI. Logic should follow Generally Accepted Accounting Principles (GAAP).
 Update readme.md if necessery
 Update plan.md if necessery
 NEVER do commit

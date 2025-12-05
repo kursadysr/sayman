@@ -28,6 +28,7 @@ export function DateInput({
 }: DateInputProps) {
   const [open, setOpen] = React.useState(false);
   const [inputValue, setInputValue] = React.useState('');
+  const [isEditing, setIsEditing] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   
   // Convert ISO date string to Date object
@@ -37,14 +38,16 @@ export function DateInput({
     return isValid(parsed) ? parsed : undefined;
   }, [value]);
 
-  // Sync input value with prop value
+  // Sync input value with prop value (only when not actively editing)
   React.useEffect(() => {
-    if (date) {
-      setInputValue(format(date, 'MM/dd/yyyy'));
-    } else {
-      setInputValue('');
+    if (!isEditing) {
+      if (date) {
+        setInputValue(format(date, 'MM/dd/yyyy'));
+      } else if (!value) {
+        setInputValue('');
+      }
     }
-  }, [date]);
+  }, [date, value, isEditing]);
 
   const handleSelect = (selectedDate: Date | undefined) => {
     if (selectedDate) {
@@ -53,26 +56,71 @@ export function DateInput({
     setOpen(false);
   };
 
+  // Check if date string looks complete (has full year)
+  const isCompleteDateString = (str: string): boolean => {
+    // Check for formats like MM/DD/YYYY or M/D/YYYY (with 4-digit year)
+    const patterns = [
+      /^\d{1,2}\/\d{1,2}\/\d{4}$/, // M/D/YYYY or MM/DD/YYYY
+      /^\d{1,2}-\d{1,2}-\d{4}$/,   // M-D-YYYY or MM-DD-YYYY
+      /^\d{4}-\d{1,2}-\d{1,2}$/,   // YYYY-MM-DD or YYYY-M-D
+    ];
+    return patterns.some(p => p.test(str));
+  };
+
+  // Validate year is reasonable (1900-2100)
+  const isReasonableYear = (parsed: Date): boolean => {
+    const year = parsed.getFullYear();
+    return year >= 1900 && year <= 2100;
+  };
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     setInputValue(newValue);
+    setIsEditing(true);
+    
+    // Only try to parse if it looks like a complete date
+    if (!isCompleteDateString(newValue)) {
+      return;
+    }
     
     // Try to parse various date formats
-    const formats = ['MM/dd/yyyy', 'M/d/yyyy', 'MM-dd-yyyy', 'M-d-yyyy', 'yyyy-MM-dd'];
+    const formats = ['MM/dd/yyyy', 'M/d/yyyy', 'MM-dd-yyyy', 'M-d-yyyy', 'yyyy-MM-dd', 'yyyy-M-d'];
     
     for (const fmt of formats) {
       const parsed = parse(newValue, fmt, new Date());
-      if (isValid(parsed)) {
+      if (isValid(parsed) && isReasonableYear(parsed)) {
         onChange?.(format(parsed, 'yyyy-MM-dd'));
         return;
       }
     }
   };
 
+  const handleInputFocus = () => {
+    setIsEditing(true);
+  };
+
   const handleInputBlur = () => {
-    // On blur, if the value is invalid, reset to the current date or clear
-    if (inputValue && !date) {
-      setInputValue(date ? format(date, 'MM/dd/yyyy') : '');
+    setIsEditing(false);
+    
+    // On blur, try to parse what user entered
+    if (inputValue) {
+      const formats = ['MM/dd/yyyy', 'M/d/yyyy', 'MM-dd-yyyy', 'M-d-yyyy', 'yyyy-MM-dd', 'yyyy-M-d'];
+      
+      for (const fmt of formats) {
+        const parsed = parse(inputValue, fmt, new Date());
+        if (isValid(parsed) && isReasonableYear(parsed)) {
+          onChange?.(format(parsed, 'yyyy-MM-dd'));
+          setInputValue(format(parsed, 'MM/dd/yyyy'));
+          return;
+        }
+      }
+      
+      // If parsing failed, reset to previous valid date or clear
+      if (date) {
+        setInputValue(format(date, 'MM/dd/yyyy'));
+      } else {
+        setInputValue('');
+      }
     }
   };
 
@@ -91,6 +139,7 @@ export function DateInput({
         type="text"
         value={inputValue}
         onChange={handleInputChange}
+        onFocus={handleInputFocus}
         onBlur={handleInputBlur}
         onKeyDown={handleInputKeyDown}
         placeholder={placeholder}
@@ -114,11 +163,11 @@ export function DateInput({
               'text-slate-400 hover:text-white hover:bg-slate-600/50',
               'focus:outline-none focus:ring-2 focus:ring-emerald-500',
               'disabled:cursor-not-allowed disabled:opacity-50',
-              'touch-manipulation' // Better touch handling on mobile
+              'touch-manipulation'
             )}
             aria-label="Open calendar"
           >
-            <CalendarIcon className="h-5 w-5 sm:h-5 sm:w-5" />
+            <CalendarIcon className="h-5 w-5" />
           </button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0 bg-slate-800 border-slate-700" align="end">
