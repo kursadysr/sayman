@@ -192,6 +192,7 @@ export interface Transaction {
   bill_id: string | null;
   invoice_id: string | null;
   timesheet_id: string | null;
+  loan_payment_id: string | null;
   created_at: string;
   updated_at: string;
   account?: Account;
@@ -199,6 +200,7 @@ export interface Transaction {
   bill?: Bill;
   invoice?: Invoice;
   timesheet?: Timesheet;
+  loan_payment?: LoanPayment;
 }
 
 export interface Loan {
@@ -228,7 +230,7 @@ export interface LoanPayment {
   id: string;
   loan_id: string;
   tenant_id: string;
-  account_id: string | null;
+  account_id: string;
   payment_date: string;
   total_amount: number;
   principal_amount: number;
@@ -237,6 +239,7 @@ export interface LoanPayment {
   notes: string | null;
   created_at: string;
   account?: Account;
+  transaction_id?: string;
 }
 
 // Form input types
@@ -325,7 +328,7 @@ export interface CreateLoanInput {
 
 export interface CreateLoanPaymentInput {
   loan_id: string;
-  account_id?: string;
+  account_id: string;
   payment_date: string;
   total_amount: number;
   principal_amount: number;

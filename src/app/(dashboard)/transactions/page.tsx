@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { ArrowUpCircle, ArrowDownCircle, Receipt } from 'lucide-react';
+import { ArrowUpCircle, ArrowDownCircle, Receipt, Landmark } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,7 @@ import { formatCurrency, formatDate } from '@/lib/utils/format';
 interface LedgerEntry {
   id: string;
   date: string;
-  type: 'bill_payment' | 'invoice_payment' | 'adjustment';
+  type: 'bill_payment' | 'invoice_payment' | 'loan_payment' | 'adjustment';
   description: string;
   amount: number;
   accountName?: string;
@@ -37,21 +37,29 @@ export default function TransactionsPage() {
       .select(`
         *,
         account:accounts(name),
-        bill:bills(bill_number, vendor:contacts(name))
+        bill:bills(bill_number, vendor:contacts(name)),
+        loan_payment:loan_payments(id, loan:loans(name, type))
       `)
       .eq('tenant_id', tenant.id)
       .order('date', { ascending: false });
 
-    const ledgerEntries: LedgerEntry[] = (transactions || []).map((tx: any) => ({
-      id: tx.id,
-      date: tx.date,
-      type: tx.bill_id ? 'bill_payment' : tx.amount > 0 ? 'invoice_payment' : 'adjustment',
-      description: tx.description || (tx.bill?.vendor?.name ? `Payment to ${tx.bill.vendor.name}` : 'Transaction'),
-      amount: tx.amount,
-      accountName: tx.account?.name,
-      contactName: tx.bill?.vendor?.name,
-      reference: tx.bill?.bill_number,
-    }));
+    const ledgerEntries: LedgerEntry[] = (transactions || []).map((tx: any) => {
+      let type: LedgerEntry['type'] = 'adjustment';
+      if (tx.bill_id) type = 'bill_payment';
+      else if (tx.loan_payment_id) type = 'loan_payment';
+      else if (tx.amount > 0) type = 'invoice_payment';
+
+      return {
+        id: tx.id,
+        date: tx.date,
+        type,
+        description: tx.description || (tx.bill?.vendor?.name ? `Payment to ${tx.bill.vendor.name}` : 'Transaction'),
+        amount: tx.amount,
+        accountName: tx.account?.name,
+        contactName: tx.bill?.vendor?.name,
+        reference: tx.bill?.bill_number || (tx.loan_payment?.loan?.name ? `Loan: ${tx.loan_payment.loan.name}` : undefined),
+      };
+    });
 
     setEntries(ledgerEntries);
     setLoading(false);
@@ -149,10 +157,16 @@ export default function TransactionsPage() {
                   <div className="flex items-center gap-4">
                     <div
                       className={`p-2 rounded-full ${
-                        entry.amount >= 0 ? 'bg-green-500/10' : 'bg-cyan-500/10'
+                        entry.type === 'loan_payment' 
+                          ? 'bg-amber-500/10'
+                          : entry.amount >= 0 
+                            ? 'bg-green-500/10' 
+                            : 'bg-cyan-500/10'
                       }`}
                     >
-                      {entry.amount >= 0 ? (
+                      {entry.type === 'loan_payment' ? (
+                        <Landmark className="h-5 w-5 text-amber-400" />
+                      ) : entry.amount >= 0 ? (
                         <ArrowUpCircle className="h-5 w-5 text-green-400" />
                       ) : (
                         <Receipt className="h-5 w-5 text-cyan-400" />
@@ -183,7 +197,11 @@ export default function TransactionsPage() {
                   </div>
                   <div
                     className={`text-lg font-bold ${
-                      entry.amount >= 0 ? 'text-green-400' : 'text-cyan-400'
+                      entry.type === 'loan_payment'
+                        ? 'text-amber-400'
+                        : entry.amount >= 0 
+                          ? 'text-green-400' 
+                          : 'text-cyan-400'
                     }`}
                   >
                     {entry.amount >= 0 ? '+' : ''}
@@ -197,7 +215,7 @@ export default function TransactionsPage() {
       </Card>
 
       <p className="text-center text-slate-500 text-sm mt-4">
-        To add expenses, go to Bills. To add income, go to Invoices.
+        To add expenses, go to Bills. To add income, go to Invoices. Loan payments also appear here.
       </p>
     </div>
   );

@@ -69,6 +69,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   const [paymentAccountId, setPaymentAccountId] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
+  const [customSplit, setCustomSplit] = useState(false);
 
   // Load payments and accounts
   useEffect(() => {
@@ -121,13 +122,14 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       setPaymentDate(new Date().toISOString().split('T')[0]);
       setPaymentAccountId('');
       setPaymentNotes('');
+      setCustomSplit(false);
     }
   }, [paymentDialogOpen, loan]);
 
-  // Update principal/interest when total changes
+  // Update principal/interest when total changes (auto-calculate unless custom split)
   const handleTotalChange = (total: number) => {
     setPaymentTotal(total);
-    if (loan) {
+    if (loan && !customSplit) {
       const interest = Math.min(
         Math.round(loan.remaining_balance * (loan.interest_rate / 12) * 100) / 100,
         total
@@ -137,8 +139,28 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     }
   };
 
+  // Recalculate when exiting custom split mode
+  const handleCustomSplitToggle = (enabled: boolean) => {
+    setCustomSplit(enabled);
+    if (!enabled && loan) {
+      // Recalculate based on current total
+      const interest = Math.min(
+        Math.round(loan.remaining_balance * (loan.interest_rate / 12) * 100) / 100,
+        paymentTotal
+      );
+      setPaymentInterest(interest);
+      setPaymentPrincipal(Math.round((paymentTotal - interest) * 100) / 100);
+    }
+  };
+
   const handleRecordPayment = async () => {
     if (!loan || !tenant) return;
+
+    // Account is required for proper bookkeeping
+    if (!paymentAccountId) {
+      toast.error('Please select an account');
+      return;
+    }
 
     setSavingPayment(true);
     const supabase = createClient();
@@ -146,19 +168,47 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     try {
       const newBalance = Math.round((loan.remaining_balance - paymentPrincipal) * 100) / 100;
 
-      const { error } = await supabase.from('loan_payments').insert({
-        loan_id: loan.id,
+      // 1. Create loan payment record
+      const { data: loanPayment, error: paymentError } = await supabase
+        .from('loan_payments')
+        .insert({
+          loan_id: loan.id,
+          tenant_id: tenant.id,
+          account_id: paymentAccountId,
+          payment_date: paymentDate,
+          total_amount: paymentTotal,
+          principal_amount: paymentPrincipal,
+          interest_amount: paymentInterest,
+          remaining_balance: Math.max(0, newBalance),
+          notes: paymentNotes || null,
+        })
+        .select()
+        .single();
+
+      if (paymentError) throw paymentError;
+
+      // 2. Create transaction for double-entry bookkeeping
+      // For payable loans: money goes OUT (negative amount)
+      // For receivable loans: money comes IN (positive amount)
+      const transactionAmount = loan.type === 'payable' 
+        ? -paymentTotal  // Paying off a loan = money out
+        : paymentTotal;  // Receiving loan payment = money in
+
+      const description = loan.type === 'payable'
+        ? `Loan payment: ${loan.name}`
+        : `Loan received: ${loan.name}`;
+
+      const { error: txError } = await supabase.from('transactions').insert({
         tenant_id: tenant.id,
-        account_id: paymentAccountId || null,
-        payment_date: paymentDate,
-        total_amount: paymentTotal,
-        principal_amount: paymentPrincipal,
-        interest_amount: paymentInterest,
-        remaining_balance: Math.max(0, newBalance),
-        notes: paymentNotes || null,
+        account_id: paymentAccountId,
+        date: paymentDate,
+        amount: transactionAmount,
+        description,
+        status: 'cleared',
+        loan_payment_id: loanPayment.id,
       });
 
-      if (error) throw error;
+      if (txError) throw txError;
 
       toast.success('Payment recorded');
       setPaymentDialogOpen(false);
@@ -181,11 +231,18 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
   };
 
   const handleDeletePayment = async (paymentId: string) => {
-    if (!confirm('Delete this payment?')) return;
+    if (!confirm('Delete this payment? This will also remove the associated transaction.')) return;
 
     const supabase = createClient();
 
     try {
+      // 1. Delete associated transaction first (due to FK constraint)
+      await supabase
+        .from('transactions')
+        .delete()
+        .eq('loan_payment_id', paymentId);
+
+      // 2. Delete loan payment
       const { error } = await supabase
         .from('loan_payments')
         .delete()
@@ -498,58 +555,37 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
           </DialogHeader>
 
           <div className="space-y-4">
-            <div>
-              <Label className="text-slate-300">Payment Date</Label>
-              <Input
-                type="date"
-                value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
-                className="mt-1 bg-slate-700/50 border-slate-600 text-white"
-              />
-            </div>
-
-            <div>
-              <Label className="text-slate-300">Total Payment</Label>
-              <Input
-                type="number"
-                step="0.01"
-                value={paymentTotal}
-                onChange={(e) => handleTotalChange(parseFloat(e.target.value) || 0)}
-                className="mt-1 bg-slate-700/50 border-slate-600 text-white"
-              />
-            </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label className="text-slate-300">Principal</Label>
+                <Label className="text-slate-300">Payment Date</Label>
                 <Input
-                  type="number"
-                  step="0.01"
-                  value={paymentPrincipal}
-                  onChange={(e) => setPaymentPrincipal(parseFloat(e.target.value) || 0)}
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
                   className="mt-1 bg-slate-700/50 border-slate-600 text-white"
                 />
               </div>
               <div>
-                <Label className="text-slate-300">Interest</Label>
+                <Label className="text-slate-300">Total Payment</Label>
                 <Input
                   type="number"
                   step="0.01"
-                  value={paymentInterest}
-                  onChange={(e) => setPaymentInterest(parseFloat(e.target.value) || 0)}
+                  value={paymentTotal}
+                  onChange={(e) => handleTotalChange(parseFloat(e.target.value) || 0)}
                   className="mt-1 bg-slate-700/50 border-slate-600 text-white"
                 />
               </div>
             </div>
 
             <div>
-              <Label className="text-slate-300">Pay From Account</Label>
+              <Label className="text-slate-300">
+                {loan.type === 'payable' ? 'Pay From Account' : 'Receive To Account'}
+              </Label>
               <Select value={paymentAccountId} onValueChange={setPaymentAccountId}>
                 <SelectTrigger className="mt-1 bg-slate-700/50 border-slate-600 text-white">
-                  <SelectValue placeholder="Select account (optional)" />
+                  <SelectValue placeholder="Select account" />
                 </SelectTrigger>
                 <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="" className="text-slate-400">No account</SelectItem>
                   {accounts.map((acc) => (
                     <SelectItem key={acc.id} value={acc.id} className="text-white">
                       {acc.name} ({formatCurrency(acc.balance, tenant.currency)})
@@ -559,10 +595,67 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
               </Select>
             </div>
 
-            <div className="p-3 bg-slate-700/30 rounded-lg">
-              <div className="text-sm text-slate-400">Balance after payment</div>
-              <div className="text-xl font-bold text-white">
-                {formatCurrency(Math.max(0, loan.remaining_balance - paymentPrincipal), tenant.currency)}
+            {/* Calculated breakdown */}
+            <div className="p-3 bg-slate-700/30 rounded-lg space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-400">Payment breakdown</span>
+                <button
+                  type="button"
+                  onClick={() => handleCustomSplitToggle(!customSplit)}
+                  className="text-xs text-emerald-400 hover:text-emerald-300"
+                >
+                  {customSplit ? 'Auto calculate' : 'Adjust split'}
+                </button>
+              </div>
+              
+              {customSplit ? (
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div>
+                    <Label className="text-xs text-slate-400">Principal</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={paymentPrincipal}
+                      onChange={(e) => setPaymentPrincipal(parseFloat(e.target.value) || 0)}
+                      className="mt-1 h-8 bg-slate-700/50 border-slate-600 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs text-slate-400">Interest</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={paymentInterest}
+                      onChange={(e) => setPaymentInterest(parseFloat(e.target.value) || 0)}
+                      className="mt-1 h-8 bg-slate-700/50 border-slate-600 text-white text-sm"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex justify-between text-sm">
+                  <div>
+                    <span className="text-slate-400">Principal: </span>
+                    <span className="text-emerald-400 font-medium">
+                      {formatCurrency(paymentPrincipal, tenant.currency)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400">Interest: </span>
+                    <span className="text-amber-400 font-medium">
+                      {formatCurrency(paymentInterest, tenant.currency)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Balance after payment */}
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-400">Balance after payment</span>
+                <span className="text-lg font-bold text-white">
+                  {formatCurrency(Math.max(0, loan.remaining_balance - paymentPrincipal), tenant.currency)}
+                </span>
               </div>
             </div>
           </div>
