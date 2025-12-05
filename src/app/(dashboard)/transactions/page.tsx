@@ -25,6 +25,13 @@ import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
 import type { Account } from '@/lib/supabase/types';
 
+interface AccountEffect {
+  accountName: string;
+  accountType: 'cash' | 'accounts_payable' | 'accounts_receivable' | 'loan_payable' | 'loan_receivable' | 'interest_expense' | 'interest_income';
+  debit: number;
+  credit: number;
+}
+
 interface LedgerEntry {
   id: string;
   date: string;
@@ -36,6 +43,8 @@ interface LedgerEntry {
   balance: number;
   accountId: string;
   accountName: string;
+  // Double-entry: all affected accounts
+  affectedAccounts: AccountEffect[];
   // Source IDs for navigation
   billId?: string;
   invoiceId?: string;
@@ -168,6 +177,67 @@ export default function LedgerPage() {
         description = tx.amount >= 0 ? 'Deposit' : 'Withdrawal';
       }
 
+      // Build affected accounts list (double-entry)
+      const affectedAccounts: AccountEffect[] = [];
+      const cashAccountName = tx.account?.name || 'Cash';
+      const amount = Math.abs(tx.amount);
+
+      if (tx.bill?.id) {
+        // Bill payment: Cash ↓ (Credit), Accounts Payable ↓ (Debit)
+        affectedAccounts.push(
+          { accountName: 'Accounts Payable', accountType: 'accounts_payable', debit: amount, credit: 0 },
+          { accountName: cashAccountName, accountType: 'cash', debit: 0, credit: amount }
+        );
+      } else if (tx.invoice?.id) {
+        // Invoice payment received: Cash ↑ (Debit), Accounts Receivable ↓ (Credit)
+        affectedAccounts.push(
+          { accountName: cashAccountName, accountType: 'cash', debit: amount, credit: 0 },
+          { accountName: 'Accounts Receivable', accountType: 'accounts_receivable', debit: 0, credit: amount }
+        );
+      } else if (tx.loan_payment?.loan?.id) {
+        const loan = tx.loan_payment.loan;
+        const principalAmount = Math.abs(tx.amount); // Simplified - actual split would need loan_payment data
+        
+        if (loan.type === 'payable') {
+          // Paying off a loan: Loan Payable ↓ (Debit), Cash ↓ (Credit)
+          affectedAccounts.push(
+            { accountName: `Loan: ${loan.name}`, accountType: 'loan_payable', debit: principalAmount, credit: 0 },
+            { accountName: cashAccountName, accountType: 'cash', debit: 0, credit: principalAmount }
+          );
+        } else {
+          // Receiving loan payment: Cash ↑ (Debit), Loan Receivable ↓ (Credit)
+          affectedAccounts.push(
+            { accountName: cashAccountName, accountType: 'cash', debit: principalAmount, credit: 0 },
+            { accountName: `Loan: ${loan.name}`, accountType: 'loan_receivable', debit: 0, credit: principalAmount }
+          );
+        }
+      } else if (description?.startsWith('Loan received:')) {
+        // Loan disbursement (payable): Cash ↑ (Debit), Loan Payable ↑ (Credit)
+        const loanName = description.replace('Loan received: ', '');
+        affectedAccounts.push(
+          { accountName: cashAccountName, accountType: 'cash', debit: amount, credit: 0 },
+          { accountName: `Loan: ${loanName}`, accountType: 'loan_payable', debit: 0, credit: amount }
+        );
+      } else if (description?.startsWith('Loan disbursed:')) {
+        // Loan disbursement (receivable): Loan Receivable ↑ (Debit), Cash ↓ (Credit)
+        const loanName = description.replace('Loan disbursed: ', '');
+        affectedAccounts.push(
+          { accountName: `Loan: ${loanName}`, accountType: 'loan_receivable', debit: amount, credit: 0 },
+          { accountName: cashAccountName, accountType: 'cash', debit: 0, credit: amount }
+        );
+      } else {
+        // Generic transaction
+        if (tx.amount >= 0) {
+          affectedAccounts.push(
+            { accountName: cashAccountName, accountType: 'cash', debit: amount, credit: 0 }
+          );
+        } else {
+          affectedAccounts.push(
+            { accountName: cashAccountName, accountType: 'cash', debit: 0, credit: amount }
+          );
+        }
+      }
+
       entries.push({
         id: tx.id,
         date: tx.date,
@@ -179,6 +249,7 @@ export default function LedgerPage() {
         balance: newBalance,
         accountId,
         accountName: tx.account?.name || 'Unknown',
+        affectedAccounts,
         billId,
         invoiceId,
         loanId,
@@ -370,28 +441,9 @@ export default function LedgerPage() {
                   onClick={() => handleEntryClick(entry)}
                   className="p-3 hover:bg-slate-700/30 transition-colors cursor-pointer active:bg-slate-700/50"
                 >
-                  {/* Row 1: Date & Account (if showing all) */}
+                  {/* Row 1: Date & Reference */}
                   <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
                     <span>{formatDate(entry.date)}</span>
-                    <div className="flex items-center gap-2">
-                      {selectedAccountId === 'all' && (
-                        <Badge variant="secondary" className="bg-slate-700 text-slate-300 text-xs">
-                          {entry.accountName}
-                        </Badge>
-                      )}
-                      {hasLink(entry) && (
-                        <ExternalLink className="h-3 w-3 text-slate-500" />
-                      )}
-                    </div>
-                  </div>
-                  
-                  {/* Row 2: Description */}
-                  <p className="text-white text-sm font-medium mb-1 line-clamp-1">
-                    {entry.description}
-                  </p>
-                  
-                  {/* Row 3: Reference & Amounts */}
-                  <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       {entry.reference && (
                         <Badge 
@@ -404,26 +456,51 @@ export default function LedgerPage() {
                           {entry.reference}
                         </Badge>
                       )}
-                    </div>
-                    
-                    <div className="flex items-center gap-3 text-sm">
-                      {/* Debit/Credit */}
-                      {entry.debit > 0 ? (
-                        <span className="text-red-400 font-medium">
-                          -{formatCurrency(entry.debit, tenant.currency)}
-                        </span>
-                      ) : (
-                        <span className="text-green-400 font-medium">
-                          +{formatCurrency(entry.credit, tenant.currency)}
-                        </span>
+                      {hasLink(entry) && (
+                        <ExternalLink className="h-3 w-3 text-slate-500" />
                       )}
                     </div>
                   </div>
                   
+                  {/* Row 2: Description */}
+                  <p className="text-white text-sm font-medium mb-2 line-clamp-1">
+                    {entry.description}
+                  </p>
+                  
+                  {/* Row 3: Affected Accounts (Double-Entry) */}
+                  <div className="bg-slate-700/20 rounded-md p-2 space-y-1">
+                    {entry.affectedAccounts.map((acc, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-xs">
+                        <span className={`flex-1 truncate ${
+                          acc.accountType === 'cash' ? 'text-blue-400' :
+                          acc.accountType === 'accounts_payable' ? 'text-orange-400' :
+                          acc.accountType === 'accounts_receivable' ? 'text-purple-400' :
+                          acc.accountType.includes('loan') ? 'text-amber-400' :
+                          'text-slate-300'
+                        }`}>
+                          {acc.accountName}
+                        </span>
+                        <div className="flex items-center gap-3 ml-2">
+                          <span className={`w-16 text-right ${acc.debit > 0 ? 'text-red-400 font-medium' : 'text-slate-600'}`}>
+                            {acc.debit > 0 ? formatCurrency(acc.debit, tenant.currency) : '—'}
+                          </span>
+                          <span className={`w-16 text-right ${acc.credit > 0 ? 'text-green-400 font-medium' : 'text-slate-600'}`}>
+                            {acc.credit > 0 ? formatCurrency(acc.credit, tenant.currency) : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Header labels for debit/credit columns */}
+                    <div className="flex items-center justify-end text-[10px] text-slate-500 pt-1 border-t border-slate-600/50">
+                      <span className="w-16 text-right">Debit</span>
+                      <span className="w-16 text-right">Credit</span>
+                    </div>
+                  </div>
+                  
                   {/* Row 4: Running Balance */}
-                  <div className="flex justify-end mt-1">
+                  <div className="flex justify-end mt-2">
                     <span className={`text-xs ${entry.balance >= 0 ? 'text-slate-400' : 'text-red-400'}`}>
-                      Bal: {formatCurrency(entry.balance, tenant.currency)}
+                      Cash Bal: {formatCurrency(entry.balance, tenant.currency)}
                     </span>
                   </div>
                 </div>
@@ -451,7 +528,7 @@ export default function LedgerPage() {
       </Card>
 
       <p className="text-center text-slate-500 text-xs mt-4">
-        Debits = Cash out • Credits = Cash in • Tap entry to view source
+        Double-entry view • Tap entry to view source document
       </p>
 
       {/* Transaction Detail Dialog (for entries without source) */}
@@ -472,7 +549,7 @@ export default function LedgerPage() {
                   <p className="text-white font-medium">{formatDate(selectedEntry.date)}</p>
                 </div>
                 <div>
-                  <p className="text-slate-400 text-sm">Account</p>
+                  <p className="text-slate-400 text-sm">Cash Account</p>
                   <p className="text-white font-medium">{selectedEntry.accountName}</p>
                 </div>
               </div>
@@ -482,27 +559,43 @@ export default function LedgerPage() {
                 <p className="text-white font-medium">{selectedEntry.description}</p>
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-700/30 rounded-lg">
-                  <p className="text-slate-400 text-sm">Debit (Out)</p>
-                  <p className="text-red-400 font-bold text-lg">
-                    {selectedEntry.debit > 0 
-                      ? formatCurrency(selectedEntry.debit, tenant.currency) 
-                      : '—'}
-                  </p>
-                </div>
-                <div className="p-3 bg-slate-700/30 rounded-lg">
-                  <p className="text-slate-400 text-sm">Credit (In)</p>
-                  <p className="text-green-400 font-bold text-lg">
-                    {selectedEntry.credit > 0 
-                      ? formatCurrency(selectedEntry.credit, tenant.currency) 
-                      : '—'}
-                  </p>
+              {/* Affected Accounts */}
+              <div>
+                <p className="text-slate-400 text-sm mb-2">Affected Accounts</p>
+                <div className="bg-slate-700/30 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 border-b border-slate-600 pb-1">
+                    <span>Account</span>
+                    <div className="flex gap-4">
+                      <span className="w-20 text-right">Debit</span>
+                      <span className="w-20 text-right">Credit</span>
+                    </div>
+                  </div>
+                  {selectedEntry.affectedAccounts.map((acc, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-sm">
+                      <span className={`flex-1 ${
+                        acc.accountType === 'cash' ? 'text-blue-400' :
+                        acc.accountType === 'accounts_payable' ? 'text-orange-400' :
+                        acc.accountType === 'accounts_receivable' ? 'text-purple-400' :
+                        acc.accountType.includes('loan') ? 'text-amber-400' :
+                        'text-white'
+                      }`}>
+                        {acc.accountName}
+                      </span>
+                      <div className="flex gap-4">
+                        <span className={`w-20 text-right ${acc.debit > 0 ? 'text-red-400 font-medium' : 'text-slate-600'}`}>
+                          {acc.debit > 0 ? formatCurrency(acc.debit, tenant.currency) : '—'}
+                        </span>
+                        <span className={`w-20 text-right ${acc.credit > 0 ? 'text-green-400 font-medium' : 'text-slate-600'}`}>
+                          {acc.credit > 0 ? formatCurrency(acc.credit, tenant.currency) : '—'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
               
               <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                <p className="text-slate-400 text-sm">Balance After</p>
+                <p className="text-slate-400 text-sm">Cash Balance After</p>
                 <p className={`font-bold text-lg ${selectedEntry.balance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                   {formatCurrency(selectedEntry.balance, tenant.currency)}
                 </p>
