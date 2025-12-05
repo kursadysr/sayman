@@ -166,7 +166,15 @@ USING (
 
 ---
 
-## 8. UI/UX Principles
+## 9. Bug Fixes
+
+### A. Loan Payment Duplicate Transaction Fix
+- Added a conditional check (`if (loan.remaining_balance > 0)`) before inserting a transaction record for loan payments in `src/features/loans/loan-details-drawer.tsx`.
+- This prevents the creation of duplicate debit transactions when a loan's remaining balance reaches zero, ensuring accurate accounting for loan repayments.
+
+---
+
+## 10. UI/UX Principles
 
 - **Keep it easy** - One item entry works for simple expenses
 - **Always itemized** - No toggle between total/items

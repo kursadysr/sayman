@@ -190,23 +190,28 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       // 2. Create transaction for double-entry bookkeeping
       // For payable loans: money goes OUT (negative amount)
       // For receivable loans: money comes IN (positive amount)
-      const transactionAmount = loan.type === 'payable' 
-        ? -paymentTotal  // Paying off a loan = money out
-        : paymentTotal;  // Receiving loan payment = money in
+      if (loan.remaining_balance > 0) {
+        const transactionAmount = loan.type === 'payable'
+          ? -paymentTotal // Paying off a loan = money out
+          : paymentTotal;  // Receiving loan payment = money in
 
-      const description = loan.type === 'payable'
-        ? `Loan payment: ${loan.name}`
-        : `Loan received: ${loan.name}`;
+        const description = loan.type === 'payable'
+          ? `Loan payment: ${loan.name}`
+          : `Loan received: ${loan.name}`;
 
-      const { error: txError } = await supabase.from('transactions').insert({
-        tenant_id: tenant.id,
-        account_id: paymentAccountId,
-        date: paymentDate,
-        amount: transactionAmount,
-        description,
-        status: 'cleared',
-        loan_payment_id: loanPayment.id,
-      });
+        const { error: txError } = await supabase.from('transactions').insert({
+          tenant_id: tenant.id,
+          account_id: paymentAccountId,
+          date: paymentDate,
+          amount: transactionAmount,
+          description,
+          status: 'cleared',
+          loan_payment_id: loanPayment.id,
+        });
+
+        if (txError) throw txError;
+      }
+
 
       if (txError) throw txError;
 
