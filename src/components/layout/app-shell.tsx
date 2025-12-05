@@ -34,7 +34,7 @@ const navigation = [
   { name: 'Loans', href: '/loans', icon: Landmark },
   { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Items', href: '/items', icon: Package },
-  { name: 'Ledger', href: '/transactions', icon: ArrowLeftRight },
+  { name: 'General Ledger', href: '/transactions', icon: ArrowLeftRight },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 

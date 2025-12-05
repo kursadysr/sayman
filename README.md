@@ -29,7 +29,7 @@ A mobile-first SaaS application for managing personal finances and business book
 - **Auto-Complete** - Suggestions when entering bills
 - **Edit & Manage** - Rename items, view purchase history
 
-### Cash Ledger
+### General Ledger
 - **Read-Only View** - All cash movements from bill/invoice payments
 - **Totals** - See total received vs paid
 
@@ -81,7 +81,7 @@ Open [http://localhost:3000](http://localhost:3000)
     /(auth)              # Login, Signup
     /(dashboard)         # Protected pages
       /dashboard         # Overview
-      /transactions      # Cash ledger
+      /transactions      # General Ledger
       /bills             # Expenses/AP
       /invoices          # Income/AR
       /contacts          # Vendors & Customers

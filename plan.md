@@ -113,10 +113,23 @@ USING (
 - Toggle "Paid" ON → Select account → Payment received
 - PDF generation with tenant branding
 
-### E. Cash Ledger (Transactions)
-- Read-only view of all cash movements
-- Shows bill payments and invoice receipts
-- No direct entry - all flows through Bills/Invoices
+### E. General Ledger (Transactions)
+- Proper accounting ledger with running balances
+- Shows debit/credit columns per accounting standards
+- Opening and closing balance tracking
+- Filter by account to view individual account ledgers
+- Reference numbers link to source documents (bills/invoices/loans)
+- No direct entry - all flows through Bills/Invoices/Loans
+
+### F. Loan Management (Double-Entry)
+- **Loan Payable** (I borrowed money):
+  - On creation: Debit Cash, Credit Loan Payable (liability)
+  - On payment: Debit Loan Payable + Interest Expense, Credit Cash
+- **Loan Receivable** (I lent money):
+  - On creation: Debit Loan Receivable (asset), Credit Cash
+  - On repayment: Debit Cash, Credit Loan Receivable + Interest Income
+- All loan transactions appear in the General Ledger
+- Initial disbursement recorded when creating loan
 
 ---
 
@@ -142,7 +155,7 @@ USING (
     /(auth)              # Login, Signup
     /(dashboard)         # Protected pages
       /dashboard         # Overview
-      /transactions      # Cash ledger (read-only)
+      /transactions      # General Ledger
       /bills             # Expenses/AP
       /invoices          # Income/AR
       /contacts          # Vendors & Customers

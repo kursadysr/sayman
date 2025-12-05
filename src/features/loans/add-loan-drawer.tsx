@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Landmark, Calculator } from 'lucide-react';
+import { Landmark, Calculator, Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Drawer,
@@ -21,6 +21,7 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { DateInput } from '@/components/ui/date-input';
@@ -32,11 +33,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency } from '@/lib/utils/format';
 import { calculatePaymentAmount } from '@/lib/utils/loan-calculator';
-import type { Contact, PaymentFrequency } from '@/lib/supabase/types';
+import type { Contact, Account, PaymentFrequency } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
 const formSchema = z.object({
@@ -49,6 +51,9 @@ const formSchema = z.object({
   payment_frequency: z.enum(['weekly', 'biweekly', 'monthly', 'quarterly', 'annually']).optional(),
   start_date: z.string().min(1, 'Start date is required'),
   notes: z.string().optional(),
+  // Double-entry accounting: disbursement account
+  record_disbursement: z.boolean().default(true),
+  account_id: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -63,6 +68,7 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
   const { tenant } = useTenant();
   const [loading, setLoading] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -76,6 +82,8 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
       payment_frequency: undefined,
       start_date: new Date().toISOString().split('T')[0],
       notes: '',
+      record_disbursement: true,
+      account_id: '',
     },
   });
 
@@ -84,6 +92,7 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
   const watchRate = form.watch('interest_rate');
   const watchTerm = form.watch('term_months');
   const watchFrequency = form.watch('payment_frequency');
+  const watchRecordDisbursement = form.watch('record_disbursement');
 
   // Calculate payment (only if frequency is set)
   const calculatedPayment = watchPrincipal > 0 && watchTerm > 0 && watchFrequency
@@ -95,19 +104,27 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
       )
     : 0;
 
-  // Load contacts
+  // Load contacts and accounts
   useEffect(() => {
     if (!tenant || !open) return;
 
     const load = async () => {
       const supabase = createClient();
-      const { data } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .order('name');
+      const [contactsRes, accountsRes] = await Promise.all([
+        supabase
+          .from('contacts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .order('name'),
+        supabase
+          .from('accounts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .order('name'),
+      ]);
 
-      setContacts((data || []) as Contact[]);
+      setContacts((contactsRes.data || []) as Contact[]);
+      setAccounts((accountsRes.data || []) as Account[]);
     };
 
     load();
@@ -126,6 +143,8 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
         payment_frequency: undefined,
         start_date: new Date().toISOString().split('T')[0],
         notes: '',
+        record_disbursement: true,
+        account_id: '',
       });
     }
   }, [open, form]);
@@ -133,11 +152,18 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
   const onSubmit = async (values: FormValues) => {
     if (!tenant) return;
 
+    // Validate account is selected if recording disbursement
+    if (values.record_disbursement && !values.account_id) {
+      toast.error('Please select an account for the disbursement');
+      return;
+    }
+
     setLoading(true);
     const supabase = createClient();
 
     try {
-      const { error } = await supabase.from('loans').insert({
+      // 1. Create the loan
+      const { data: loan, error: loanError } = await supabase.from('loans').insert({
         tenant_id: tenant.id,
         type: values.type,
         name: values.name,
@@ -150,9 +176,37 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
         monthly_payment: calculatedPayment || null,
         remaining_balance: values.principal_amount,
         notes: values.notes || null,
-      });
+      }).select().single();
 
-      if (error) throw error;
+      if (loanError) throw loanError;
+
+      // 2. Create initial disbursement transaction (double-entry)
+      if (values.record_disbursement && values.account_id) {
+        // Payable = I borrowed = Cash IN (positive)
+        // Receivable = I lent = Cash OUT (negative)
+        const amount = values.type === 'payable' 
+          ? values.principal_amount 
+          : -values.principal_amount;
+
+        const description = values.type === 'payable'
+          ? `Loan received: ${values.name}`
+          : `Loan disbursed: ${values.name}`;
+
+        const { error: txError } = await supabase.from('transactions').insert({
+          tenant_id: tenant.id,
+          account_id: values.account_id,
+          date: values.start_date,
+          amount,
+          description,
+          status: 'cleared',
+        });
+
+        if (txError) {
+          console.error('Error creating disbursement transaction:', txError);
+          // Don't fail the whole operation, loan is already created
+          toast.warning('Loan created but disbursement transaction failed');
+        }
+      }
 
       toast.success('Loan added successfully');
       onOpenChange(false);
@@ -329,7 +383,7 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
                   name="payment_frequency"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel className="text-slate-300">Payment Frequency (Optional)</FormLabel>
+                      <FormLabel className="text-slate-300">Payment Frequency</FormLabel>
                       <Select onValueChange={(v) => field.onChange(v === 'none' ? undefined : v)} value={field.value || 'none'}>
                         <FormControl>
                           <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
@@ -379,11 +433,81 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
                   <div className="text-2xl font-bold text-white">
                     {formatCurrency(calculatedPayment, tenant.currency)}
                     <span className="text-sm font-normal text-slate-400 ml-2">
-                      per {watchFrequency === 'biweekly' ? 'bi-week' : watchFrequency.replace('ly', '')}
+                      per {watchFrequency === 'biweekly' ? 'bi-week' : watchFrequency?.replace('ly', '')}
                     </span>
                   </div>
                 </div>
               )}
+
+              {/* Disbursement Account - Double Entry Bookkeeping */}
+              <div className="p-4 bg-slate-700/30 rounded-lg space-y-4">
+                <FormField
+                  control={form.control}
+                  name="record_disbursement"
+                  render={({ field }) => (
+                    <FormItem className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <FormLabel className="text-slate-300">
+                          Record Cash {watchType === 'payable' ? 'Received' : 'Disbursed'}
+                        </FormLabel>
+                        <FormDescription className="text-slate-500 text-xs">
+                          {watchType === 'payable' 
+                            ? 'Record the loan amount received in your account'
+                            : 'Record the loan amount given from your account'
+                          }
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+
+                {watchRecordDisbursement && (
+                  <FormField
+                    control={form.control}
+                    name="account_id"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-slate-300">
+                          {watchType === 'payable' ? 'Deposit To' : 'Pay From'}
+                        </FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value || ''}>
+                          <FormControl>
+                            <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white">
+                              <SelectValue placeholder="Select account" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent className="bg-slate-800 border-slate-700">
+                            {accounts.map((acc) => (
+                              <SelectItem key={acc.id} value={acc.id} className="text-white">
+                                {acc.name} ({formatCurrency(acc.balance, tenant.currency)})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                {watchRecordDisbursement && watchPrincipal > 0 && (
+                  <div className="flex items-start gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs">
+                    <Info className="h-4 w-4 text-blue-400 mt-0.5 shrink-0" />
+                    <span className="text-blue-300">
+                      {watchType === 'payable' 
+                        ? `${formatCurrency(watchPrincipal, tenant.currency)} will be added to your account (loan received)`
+                        : `${formatCurrency(watchPrincipal, tenant.currency)} will be deducted from your account (loan given)`
+                      }
+                    </span>
+                  </div>
+                )}
+              </div>
 
               <FormField
                 control={form.control}
@@ -428,4 +552,3 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
     </Drawer>
   );
 }
-
