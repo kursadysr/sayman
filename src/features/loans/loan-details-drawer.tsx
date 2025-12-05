@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -440,7 +441,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
                           {amortizationSchedule.slice(0, 60).map((entry) => (
                             <tr key={entry.paymentNumber} className="border-t border-slate-700">
                               <td className="p-2">{entry.paymentNumber}</td>
-                              <td className="p-2">{entry.paymentDate.toLocaleDateString()}</td>
+                              <td className="p-2">{formatDate(entry.paymentDate)}</td>
                               <td className="text-right p-2">
                                 {formatCurrency(entry.paymentAmount, tenant.currency)}
                               </td>
@@ -537,10 +538,9 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label className="text-slate-300">Payment Date</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
+                  onChange={(value) => setPaymentDate(value)}
                   className="mt-1 bg-slate-700/50 border-slate-600 text-white"
                 />
               </div>

@@ -21,7 +21,7 @@ export function formatCurrency(amount: number, currency: string = 'USD'): string
   }).format(amount);
 }
 
-export function formatDate(date: string | Date, formatStr: string = 'MMM d, yyyy'): string {
+export function formatDate(date: string | Date, formatStr: string = 'MM/dd/yyyy'): string {
   const d = typeof date === 'string' ? parseISO(date) : date;
   return format(d, formatStr);
 }

@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import {
   Select,
   SelectContent,
@@ -443,9 +444,9 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                     <FormItem>
                       <FormLabel className="text-slate-300">Date *</FormLabel>
                       <FormControl>
-                        <Input
-                          type="date"
-                          {...field}
+                        <DateInput
+                          value={field.value}
+                          onChange={field.onChange}
                           className="bg-slate-700/50 border-slate-600 text-white"
                         />
                       </FormControl>
@@ -462,9 +463,9 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                   <FormItem>
                     <FormLabel className="text-slate-300">Due Date</FormLabel>
                     <FormControl>
-                      <Input
-                        type="date"
-                        {...field}
+                      <DateInput
+                        value={field.value}
+                        onChange={field.onChange}
                         className="bg-slate-700/50 border-slate-600 text-white"
                       />
                     </FormControl>
