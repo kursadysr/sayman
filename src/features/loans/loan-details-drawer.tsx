@@ -187,28 +187,7 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
 
       if (paymentError) throw paymentError;
 
-      // 2. Create transaction for double-entry bookkeeping
-      // For payable loans: money goes OUT (negative amount)
-      // For receivable loans: money comes IN (positive amount)
-      const transactionAmount = loan.type === 'payable' 
-        ? -paymentTotal  // Paying off a loan = money out
-        : paymentTotal;  // Receiving loan payment = money in
-
-      const description = loan.type === 'payable'
-        ? `Loan payment: ${loan.name}`
-        : `Loan received: ${loan.name}`;
-
-      const { error: txError } = await supabase.from('transactions').insert({
-        tenant_id: tenant.id,
-        account_id: paymentAccountId,
-        date: paymentDate,
-        amount: transactionAmount,
-        description,
-        status: 'cleared',
-        loan_payment_id: loanPayment.id,
-      });
-
-      if (txError) throw txError;
+      // Transaction is created automatically by database trigger (create_loan_payment_transaction_trigger)
 
       toast.success('Payment recorded');
       setPaymentDialogOpen(false);
