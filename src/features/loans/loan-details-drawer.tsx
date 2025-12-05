@@ -206,6 +206,12 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       return;
     }
 
+    // Validate principal payment doesn't exceed remaining balance
+    if (paymentPrincipal > remainingBalance) {
+      toast.error(`Principal payment cannot exceed remaining balance of ${formatCurrency(remainingBalance, tenant.currency)}`);
+      return;
+    }
+
     // For payable loans (money going out), validate sufficient funds
     if (loan.type === 'payable') {
       const selectedAccount = accounts.find(acc => acc.id === paymentAccountId);
@@ -305,6 +311,15 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
 
     if (!paymentAccountId) {
       toast.error('Please select an account');
+      return;
+    }
+
+    // Calculate effective remaining balance (add back the original principal being edited)
+    const effectiveRemainingBalance = remainingBalance + editingPayment.principal_amount;
+    
+    // Validate principal payment doesn't exceed remaining balance
+    if (paymentPrincipal > effectiveRemainingBalance) {
+      toast.error(`Principal payment cannot exceed remaining balance of ${formatCurrency(effectiveRemainingBalance, tenant.currency)}`);
       return;
     }
 
