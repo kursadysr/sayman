@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Receipt, BookOpen, Landmark, ExternalLink, Calendar } from 'lucide-react';
+import { Receipt, BookOpen, Landmark, ExternalLink, Filter, X, ArrowUpDown, CalendarDays, Wallet, Tag } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -11,7 +11,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  SelectSeparator,
 } from '@/components/ui/select';
 import {
   Dialog,
@@ -21,6 +20,15 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+  SheetFooter,
+} from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { DateInput } from '@/components/ui/date-input';
@@ -93,6 +101,9 @@ export default function LedgerPage() {
   // Detail dialog for transactions without source
   const [selectedEntry, setSelectedEntry] = useState<LedgerEntry | null>(null);
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
+  
+  // Filter sheet state
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!tenant) return;
@@ -479,84 +490,283 @@ export default function LedgerPage() {
 
   // Check if any filter is active
   const hasActiveFilters = typeFilter !== 'all' || selectedAccountId !== 'all' || dateFilter !== 'all';
+  const activeFilterCount = [typeFilter !== 'all', selectedAccountId !== 'all', dateFilter !== 'all'].filter(Boolean).length;
+
+  // Clear all filters
+  const clearAllFilters = () => {
+    setTypeFilter('all');
+    setSelectedAccountId('all');
+    setDateFilter('all');
+    setCustomDateStart('');
+    setCustomDateEnd('');
+  };
+
+  // Quick date filter options
+  const quickDateFilters: { value: DateFilter; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'this_month', label: 'This Month' },
+    { value: 'last_month', label: 'Last Month' },
+    { value: 'this_year', label: 'This Year' },
+  ];
+
+  // Get selected account name
+  const selectedAccountName = selectedAccountId === 'all' 
+    ? null 
+    : accounts.find(a => a.id === selectedAccountId)?.name;
+
+  // Get type filter label
+  const typeFilterLabel = typeFilter === 'all' ? null : 
+    typeFilter === 'bill' ? 'Bills' :
+    typeFilter === 'invoice' ? 'Invoices' :
+    typeFilter === 'loan' ? 'Loans' : 'Other';
 
   return (
     <div className="p-4 lg:p-8 pb-24 lg:pb-8">
       {/* Header */}
-      <div className="flex flex-col gap-3 mb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-            <BookOpen className="h-6 w-6 text-emerald-400" />
-            General Ledger
-          </h1>
-          <p className="text-slate-400 text-sm">Tap any entry to view details</p>
+      <div className="flex flex-col gap-4 mb-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+              <BookOpen className="h-6 w-6 text-emerald-400" />
+              General Ledger
+            </h1>
+            <p className="text-slate-400 text-sm">Tap any entry to view details</p>
+          </div>
+          
+          {/* Sort Toggle */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSortBy(sortBy === 'date_desc' ? 'date_asc' : 'date_desc')}
+            className="text-slate-400 hover:text-white"
+          >
+            <ArrowUpDown className="h-4 w-4 mr-1" />
+            {sortBy === 'date_desc' ? 'Newest' : 'Oldest'}
+          </Button>
         </div>
         
-        {/* All Filters in One Row */}
-        <div className="grid grid-cols-4 gap-2">
-          {/* Date Filter */}
-          <Select value={dateFilter} onValueChange={handleDateFilterChange}>
-            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
-              <Calendar className="h-3 w-3 mr-1 text-slate-400 flex-shrink-0" />
-              <span className="truncate">{getDateFilterLabel(dateFilter)}</span>
-            </SelectTrigger>
-            <SelectContent className="bg-slate-800 border-slate-700">
-              <SelectItem value="all" className="text-white">All Time</SelectItem>
-              <SelectSeparator className="bg-slate-700" />
-              <SelectItem value="this_month" className="text-white">This Month</SelectItem>
-              <SelectItem value="last_month" className="text-white">Last Month</SelectItem>
-              <SelectSeparator className="bg-slate-700" />
-              <SelectItem value="q1" className="text-white">Q1</SelectItem>
-              <SelectItem value="q2" className="text-white">Q2</SelectItem>
-              <SelectItem value="q3" className="text-white">Q3</SelectItem>
-              <SelectItem value="q4" className="text-white">Q4</SelectItem>
-              <SelectSeparator className="bg-slate-700" />
-              <SelectItem value="this_year" className="text-white">This Year</SelectItem>
-              <SelectItem value="last_year" className="text-white">Last Year</SelectItem>
-              <SelectSeparator className="bg-slate-700" />
-              <SelectItem value="custom" className="text-white">Custom...</SelectItem>
-            </SelectContent>
-          </Select>
+        {/* Quick Date Filters */}
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 scrollbar-hide">
+          {quickDateFilters.map((filter) => (
+            <button
+              key={filter.value}
+              onClick={() => setDateFilter(filter.value)}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                dateFilter === filter.value
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
+              }`}
+            >
+              {filter.label}
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              setTempStartDate(customDateStart || new Date().toISOString().split('T')[0]);
+              setTempEndDate(customDateEnd || new Date().toISOString().split('T')[0]);
+              setCustomDateDialogOpen(true);
+            }}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1 ${
+              dateFilter === 'custom'
+                ? 'bg-emerald-500 text-white'
+                : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <CalendarDays className="h-3.5 w-3.5" />
+            {dateFilter === 'custom' && customDateStart && customDateEnd
+              ? `${formatDate(customDateStart)} - ${formatDate(customDateEnd)}`
+              : 'Custom'}
+          </button>
+        </div>
 
-          {/* Account Filter */}
-          <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
-            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
-              <span className="truncate"><SelectValue placeholder="Account" /></span>
-            </SelectTrigger>
-            <SelectContent className="bg-slate-800 border-slate-700">
-              <SelectItem value="all" className="text-white">All Accounts</SelectItem>
-              {accounts.map((account) => (
-                <SelectItem key={account.id} value={account.id} className="text-white">
-                  {account.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Filter Bar */}
+        <div className="flex items-center gap-2">
+          {/* Filter Button */}
+          <Sheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen}>
+            <SheetTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={`border-slate-700 ${
+                  hasActiveFilters 
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                <Filter className="h-4 w-4 mr-1.5" />
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="ml-1.5 bg-emerald-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="bottom" className="bg-slate-900 border-slate-700">
+              <SheetHeader>
+                <SheetTitle className="text-white">Filter Transactions</SheetTitle>
+                <SheetDescription className="text-slate-400">
+                  Narrow down your ledger entries
+                </SheetDescription>
+              </SheetHeader>
+              
+              <div className="space-y-6 py-6">
+                {/* Account Filter */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300 flex items-center gap-2">
+                    <Wallet className="h-4 w-4 text-blue-400" />
+                    Account
+                  </Label>
+                  <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
+                    <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
+                      <SelectValue placeholder="All Accounts" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-slate-800 border-slate-700">
+                      <SelectItem value="all" className="text-white">All Accounts</SelectItem>
+                      {accounts.map((account) => (
+                        <SelectItem key={account.id} value={account.id} className="text-white">
+                          {account.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-          {/* Type Filter */}
-          <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as TypeFilter)}>
-            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
-              <span className="truncate"><SelectValue placeholder="Type" /></span>
-            </SelectTrigger>
-            <SelectContent className="bg-slate-800 border-slate-700">
-              <SelectItem value="all" className="text-white">All Types</SelectItem>
-              <SelectItem value="bill" className="text-white">Bills</SelectItem>
-              <SelectItem value="invoice" className="text-white">Invoices</SelectItem>
-              <SelectItem value="loan" className="text-white">Loans</SelectItem>
-              <SelectItem value="other" className="text-white">Other</SelectItem>
-            </SelectContent>
-          </Select>
+                {/* Type Filter */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300 flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-purple-400" />
+                    Transaction Type
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { value: 'all', label: 'All' },
+                      { value: 'bill', label: 'Bills' },
+                      { value: 'invoice', label: 'Invoices' },
+                      { value: 'loan', label: 'Loans' },
+                      { value: 'other', label: 'Other' },
+                    ].map((type) => (
+                      <button
+                        key={type.value}
+                        onClick={() => setTypeFilter(type.value as TypeFilter)}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                          typeFilter === type.value
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {type.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-          {/* Sort */}
-          <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortOption)}>
-            <SelectTrigger className="bg-slate-800 border-slate-700 text-white text-xs px-2">
-              <span className="truncate"><SelectValue /></span>
-            </SelectTrigger>
-            <SelectContent className="bg-slate-800 border-slate-700">
-              <SelectItem value="date_desc" className="text-white">Newest</SelectItem>
-              <SelectItem value="date_asc" className="text-white">Oldest</SelectItem>
-            </SelectContent>
-          </Select>
+                {/* Date Presets */}
+                <div className="space-y-2">
+                  <Label className="text-slate-300 flex items-center gap-2">
+                    <CalendarDays className="h-4 w-4 text-amber-400" />
+                    Date Range
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { value: 'all', label: 'All Time' },
+                      { value: 'this_month', label: 'This Month' },
+                      { value: 'last_month', label: 'Last Month' },
+                      { value: 'q1', label: 'Q1' },
+                      { value: 'q2', label: 'Q2' },
+                      { value: 'q3', label: 'Q3' },
+                      { value: 'q4', label: 'Q4' },
+                      { value: 'this_year', label: 'This Year' },
+                      { value: 'last_year', label: 'Last Year' },
+                    ].map((filter) => (
+                      <button
+                        key={filter.value}
+                        onClick={() => setDateFilter(filter.value as DateFilter)}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                          dateFilter === filter.value
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        setFilterSheetOpen(false);
+                        setTempStartDate(customDateStart || new Date().toISOString().split('T')[0]);
+                        setTempEndDate(customDateEnd || new Date().toISOString().split('T')[0]);
+                        setCustomDateDialogOpen(true);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1 ${
+                        dateFilter === 'custom'
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      Custom...
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <SheetFooter className="flex-row gap-2">
+                <Button
+                  variant="outline"
+                  onClick={clearAllFilters}
+                  className="flex-1 border-slate-700 text-slate-300"
+                >
+                  Clear All
+                </Button>
+                <Button
+                  onClick={() => setFilterSheetOpen(false)}
+                  className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
+                >
+                  Apply
+                </Button>
+              </SheetFooter>
+            </SheetContent>
+          </Sheet>
+
+          {/* Active Filter Chips */}
+          <div className="flex gap-2 overflow-x-auto flex-1 scrollbar-hide">
+            {selectedAccountName && (
+              <Badge
+                variant="outline"
+                className="bg-blue-500/10 text-blue-400 border-blue-500/30 flex items-center gap-1 flex-shrink-0"
+              >
+                <Wallet className="h-3 w-3" />
+                {selectedAccountName}
+                <button onClick={() => setSelectedAccountId('all')} className="ml-1 hover:text-blue-300">
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            )}
+            {typeFilterLabel && (
+              <Badge
+                variant="outline"
+                className="bg-purple-500/10 text-purple-400 border-purple-500/30 flex items-center gap-1 flex-shrink-0"
+              >
+                <Tag className="h-3 w-3" />
+                {typeFilterLabel}
+                <button onClick={() => setTypeFilter('all')} className="ml-1 hover:text-purple-300">
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            )}
+          </div>
+
+          {/* Clear All (only when filters active) */}
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearAllFilters}
+              className="text-slate-400 hover:text-white flex-shrink-0"
+            >
+              Clear
+            </Button>
+          )}
         </div>
       </div>
 
@@ -565,25 +775,11 @@ export default function LedgerPage() {
         <CardContent className="p-0">
           {/* Entry count header */}
           {!loading && ledgerEntries.length > 0 && (
-            <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+            <div className="px-3 py-2 border-b border-slate-700">
               <span className="text-xs text-slate-400">
                 {ledgerEntries.length} {ledgerEntries.length === 1 ? 'entry' : 'entries'}
                 {hasActiveFilters && ' (filtered)'}
               </span>
-              {hasActiveFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setTypeFilter('all');
-                    setSelectedAccountId('all');
-                    setDateFilter('all');
-                  }}
-                  className="text-xs h-6 text-slate-400 hover:text-white"
-                >
-                  Clear filters
-                </Button>
-              )}
             </div>
           )}
           {loading ? (
