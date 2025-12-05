@@ -158,6 +158,17 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
       return;
     }
 
+    // For receivable loans (money going OUT), validate sufficient funds for non-credit accounts
+    if (values.record_disbursement && values.account_id && values.type === 'receivable') {
+      const selectedAccount = accounts.find(acc => acc.id === values.account_id);
+      if (selectedAccount && selectedAccount.type !== 'credit') {
+        if (selectedAccount.balance < values.principal_amount) {
+          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+          return;
+        }
+      }
+    }
+
     setLoading(true);
     const supabase = createClient();
 

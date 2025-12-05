@@ -56,6 +56,7 @@ export interface Account {
   name: string;
   type: AccountType;
   balance: number;
+  credit_limit: number | null; // Only applicable for credit accounts
   created_at: string;
   updated_at: string;
 }

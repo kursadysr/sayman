@@ -104,9 +104,19 @@ export function RecordPaymentDialog({
   const onSubmit = async (values: FormValues) => {
     if (!tenant || !bill) return;
 
+    const paymentAmount = parseFloat(values.amount);
+    
+    // Validate sufficient funds for non-credit accounts
+    const selectedAccount = accounts.find(acc => acc.id === values.account_id);
+    if (selectedAccount && selectedAccount.type !== 'credit') {
+      if (selectedAccount.balance < paymentAmount) {
+        toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+        return;
+      }
+    }
+
     setLoading(true);
     const supabase = createClient();
-    const paymentAmount = parseFloat(values.amount);
 
     try {
       // Create payment transaction (cash outflow)

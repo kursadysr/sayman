@@ -254,6 +254,18 @@ export function AddTimesheetDrawer({
       }
     }
 
+    // Validate sufficient funds for non-credit accounts when paying immediately
+    if (values.isPaid && values.account_id) {
+      const selectedAccount = accounts.find(acc => acc.id === values.account_id);
+      if (selectedAccount && selectedAccount.type !== 'credit') {
+        const totalPayment = lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
+        if (selectedAccount.balance < totalPayment) {
+          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+          return;
+        }
+      }
+    }
+
     setLoading(true);
     const supabase = createClient();
 

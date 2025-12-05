@@ -206,6 +206,17 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       return;
     }
 
+    // For payable loans (money going out), validate sufficient funds for non-credit accounts
+    if (loan.type === 'payable') {
+      const selectedAccount = accounts.find(acc => acc.id === paymentAccountId);
+      if (selectedAccount && selectedAccount.type !== 'credit') {
+        if (selectedAccount.balance < paymentTotal) {
+          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+          return;
+        }
+      }
+    }
+
     setSavingPayment(true);
     const supabase = createClient();
 
@@ -293,6 +304,24 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
     if (!paymentAccountId) {
       toast.error('Please select an account');
       return;
+    }
+
+    // For payable loans (money going out), validate sufficient funds for non-credit accounts
+    // Consider the original payment amount that will be reversed
+    if (loan.type === 'payable') {
+      const selectedAccount = accounts.find(acc => acc.id === paymentAccountId);
+      if (selectedAccount && selectedAccount.type !== 'credit') {
+        // Calculate effective balance: current + original payment (reversed) - new payment
+        const originalWasFromSameAccount = editingPayment.account_id === paymentAccountId;
+        const effectiveBalance = originalWasFromSameAccount 
+          ? selectedAccount.balance + editingPayment.total_amount 
+          : selectedAccount.balance;
+        
+        if (effectiveBalance < paymentTotal) {
+          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(effectiveBalance, tenant.currency)}`);
+          return;
+        }
+      }
     }
 
     setSavingPayment(true);
