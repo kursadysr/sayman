@@ -1,4 +1,30 @@
 import { format, parseISO } from 'date-fns';
+import type { Account } from '@/lib/supabase/types';
+
+/**
+ * Check if an account has sufficient funds for a withdrawal
+ * @param account - The account to check
+ * @param amount - The amount to withdraw (positive number)
+ * @returns Object with hasFunds boolean and available amount
+ */
+export function checkAccountFunds(
+  account: Account,
+  amount: number
+): { hasFunds: boolean; available: number } {
+  // Ensure numeric conversion (DB might return strings)
+  const balance = Number(account.balance) || 0;
+  const creditLimit = Number(account.credit_limit) || 0;
+  
+  if (account.type === 'credit') {
+    // Credit accounts: available = credit_limit + balance (balance is negative when owing)
+    // If no credit limit set, default to 0 (no available credit)
+    const available = creditLimit + balance;
+    return { hasFunds: available >= amount, available };
+  } else {
+    // Bank/Cash accounts: can't go negative
+    return { hasFunds: balance >= amount, available: balance };
+  }
+}
 
 // UUID generator with fallback for older browsers
 export function generateId(): string {

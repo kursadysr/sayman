@@ -42,7 +42,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/utils/format';
+import { formatCurrency, checkAccountFunds } from '@/lib/utils/format';
 import { generateId } from '@/lib/utils/format';
 import type { Contact, Account, TimesheetCategory } from '@/lib/supabase/types';
 import { toast } from 'sonner';
@@ -254,13 +254,15 @@ export function AddTimesheetDrawer({
       }
     }
 
-    // Validate sufficient funds for non-credit accounts when paying immediately
+    // Validate sufficient funds when paying immediately
     if (values.isPaid && values.account_id) {
       const selectedAccount = accounts.find(acc => acc.id === values.account_id);
-      if (selectedAccount && selectedAccount.type !== 'credit') {
+      if (selectedAccount) {
         const totalPayment = lineItems.reduce((sum, item) => sum + calculateLineTotal(item), 0);
-        if (selectedAccount.balance < totalPayment) {
-          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+        const { hasFunds, available } = checkAccountFunds(selectedAccount, totalPayment);
+        if (!hasFunds) {
+          const label = selectedAccount.type === 'credit' ? 'Available credit' : 'Available';
+          toast.error(`Insufficient funds in ${selectedAccount.name}. ${label}: ${formatCurrency(available, tenant.currency)}`);
           return;
         }
       }

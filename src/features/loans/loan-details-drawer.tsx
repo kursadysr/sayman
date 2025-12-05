@@ -35,7 +35,7 @@ import { Badge } from '@/components/ui/badge';
 import { useTenant } from '@/hooks/use-tenant';
 import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency, formatDate } from '@/lib/utils/format';
+import { formatCurrency, formatDate, checkAccountFunds } from '@/lib/utils/format';
 import { 
   calculateNextPayment, 
   generateAmortizationSchedule,
@@ -206,12 +206,14 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       return;
     }
 
-    // For payable loans (money going out), validate sufficient funds for non-credit accounts
+    // For payable loans (money going out), validate sufficient funds
     if (loan.type === 'payable') {
       const selectedAccount = accounts.find(acc => acc.id === paymentAccountId);
-      if (selectedAccount && selectedAccount.type !== 'credit') {
-        if (selectedAccount.balance < paymentTotal) {
-          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+      if (selectedAccount) {
+        const { hasFunds, available } = checkAccountFunds(selectedAccount, paymentTotal);
+        if (!hasFunds) {
+          const label = selectedAccount.type === 'credit' ? 'Available credit' : 'Available';
+          toast.error(`Insufficient funds in ${selectedAccount.name}. ${label}: ${formatCurrency(available, tenant.currency)}`);
           return;
         }
       }
@@ -306,19 +308,21 @@ export function LoanDetailsDrawer({ loan, open, onOpenChange, onUpdate }: LoanDe
       return;
     }
 
-    // For payable loans (money going out), validate sufficient funds for non-credit accounts
+    // For payable loans (money going out), validate sufficient funds
     // Consider the original payment amount that will be reversed
     if (loan.type === 'payable') {
       const selectedAccount = accounts.find(acc => acc.id === paymentAccountId);
-      if (selectedAccount && selectedAccount.type !== 'credit') {
-        // Calculate effective balance: current + original payment (reversed) - new payment
+      if (selectedAccount) {
+        // Calculate effective available: current + original payment (if from same account)
         const originalWasFromSameAccount = editingPayment.account_id === paymentAccountId;
-        const effectiveBalance = originalWasFromSameAccount 
-          ? selectedAccount.balance + editingPayment.total_amount 
-          : selectedAccount.balance;
+        const effectiveAccount = originalWasFromSameAccount 
+          ? { ...selectedAccount, balance: selectedAccount.balance + editingPayment.total_amount }
+          : selectedAccount;
         
-        if (effectiveBalance < paymentTotal) {
-          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(effectiveBalance, tenant.currency)}`);
+        const { hasFunds, available } = checkAccountFunds(effectiveAccount, paymentTotal);
+        if (!hasFunds) {
+          const label = selectedAccount.type === 'credit' ? 'Available credit' : 'Available';
+          toast.error(`Insufficient funds in ${selectedAccount.name}. ${label}: ${formatCurrency(available, tenant.currency)}`);
           return;
         }
       }

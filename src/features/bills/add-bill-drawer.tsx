@@ -35,7 +35,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency, generateId } from '@/lib/utils/format';
+import { formatCurrency, generateId, checkAccountFunds } from '@/lib/utils/format';
 import type { Contact, Item, Account } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
@@ -238,6 +238,19 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
     if (isPaidNow && !values.account_id) {
       toast.error('Please select an account');
       return;
+    }
+
+    // Validate sufficient funds when paying immediately
+    if (isPaidNow && values.account_id) {
+      const selectedAccount = accounts.find(acc => acc.id === values.account_id);
+      if (selectedAccount) {
+        const { hasFunds, available } = checkAccountFunds(selectedAccount, total);
+        if (!hasFunds) {
+          const label = selectedAccount.type === 'credit' ? 'Available credit' : 'Available';
+          toast.error(`Insufficient funds in ${selectedAccount.name}. ${label}: ${formatCurrency(available, tenant.currency)}`);
+          return;
+        }
+      }
     }
 
     setLoading(true);

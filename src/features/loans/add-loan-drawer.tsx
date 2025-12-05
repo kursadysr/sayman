@@ -36,7 +36,7 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
-import { formatCurrency } from '@/lib/utils/format';
+import { formatCurrency, checkAccountFunds } from '@/lib/utils/format';
 import { calculatePaymentAmount } from '@/lib/utils/loan-calculator';
 import type { Contact, Account, PaymentFrequency } from '@/lib/supabase/types';
 import { toast } from 'sonner';
@@ -158,12 +158,14 @@ export function AddLoanDrawer({ open, onOpenChange, onSuccess }: AddLoanDrawerPr
       return;
     }
 
-    // For receivable loans (money going OUT), validate sufficient funds for non-credit accounts
+    // For receivable loans (money going OUT), validate sufficient funds
     if (values.record_disbursement && values.account_id && values.type === 'receivable') {
       const selectedAccount = accounts.find(acc => acc.id === values.account_id);
-      if (selectedAccount && selectedAccount.type !== 'credit') {
-        if (selectedAccount.balance < values.principal_amount) {
-          toast.error(`Insufficient funds in ${selectedAccount.name}. Available: ${formatCurrency(selectedAccount.balance, tenant.currency)}`);
+      if (selectedAccount) {
+        const { hasFunds, available } = checkAccountFunds(selectedAccount, values.principal_amount);
+        if (!hasFunds) {
+          const label = selectedAccount.type === 'credit' ? 'Available credit' : 'Available';
+          toast.error(`Insufficient funds in ${selectedAccount.name}. ${label}: ${formatCurrency(available, tenant.currency)}`);
           return;
         }
       }

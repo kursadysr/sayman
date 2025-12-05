@@ -42,6 +42,7 @@ const accountFormSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   type: z.enum(['bank', 'cash', 'credit']),
   balance: z.number(),
+  credit_limit: z.number().optional(),
 });
 
 type AccountFormValues = z.infer<typeof accountFormSchema>;
@@ -66,8 +67,11 @@ export default function AccountsPage() {
       name: '',
       type: 'bank',
       balance: 0,
+      credit_limit: 0,
     },
   });
+
+  const watchType = form.watch('type');
 
   const loadAccounts = useCallback(async () => {
     if (!tenant) return;
@@ -100,6 +104,7 @@ export default function AccountsPage() {
         name: values.name,
         type: values.type,
         balance: values.balance,
+        credit_limit: values.type === 'credit' ? (values.credit_limit || 0) : null,
       });
 
       if (error) throw error;
@@ -191,6 +196,12 @@ export default function AccountsPage() {
             <div className="divide-y divide-slate-700">
               {accounts.map((account) => {
                 const Icon = typeIcons[account.type];
+                // For credit cards: available = limit + balance (balance is negative when owing)
+                const creditLimit = Number(account.credit_limit) || 0;
+                const balance = Number(account.balance) || 0;
+                const availableCredit = account.type === 'credit' && creditLimit > 0
+                  ? creditLimit + balance
+                  : null;
                 return (
                   <div
                     key={account.id}
@@ -202,13 +213,27 @@ export default function AccountsPage() {
                       </div>
                       <div>
                         <p className="font-medium text-white">{account.name}</p>
-                        <p className="text-sm text-slate-400 capitalize">{account.type}</p>
+                        <p className="text-sm text-slate-400 capitalize">
+                          {account.type}
+                          {account.type === 'credit' && creditLimit > 0 && (
+                            <span className="text-slate-500">
+                              {' • '}Limit: {formatCurrency(creditLimit, tenant.currency)}
+                            </span>
+                          )}
+                        </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <p className={`text-lg font-bold ${account.balance >= 0 ? 'text-white' : 'text-red-400'}`}>
-                        {formatCurrency(account.balance, tenant.currency)}
-                      </p>
+                      <div className="text-right">
+                        <p className={`text-lg font-bold ${balance >= 0 ? 'text-white' : 'text-red-400'}`}>
+                          {formatCurrency(balance, tenant.currency)}
+                        </p>
+                        {availableCredit !== null && (
+                          <p className={`text-xs ${availableCredit > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {formatCurrency(availableCredit, tenant.currency)} available
+                          </p>
+                        )}
+                      </div>
                       {canWrite && (
                         <Button
                           variant="ghost"
@@ -286,7 +311,9 @@ export default function AccountsPage() {
                 name="balance"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="text-slate-300">Current Balance</FormLabel>
+                    <FormLabel className="text-slate-300">
+                      {watchType === 'credit' ? 'Current Balance (negative = owed)' : 'Current Balance'}
+                    </FormLabel>
                     <FormControl>
                       <Input
                         type="number"
@@ -301,6 +328,30 @@ export default function AccountsPage() {
                   </FormItem>
                 )}
               />
+
+              {watchType === 'credit' && (
+                <FormField
+                  control={form.control}
+                  name="credit_limit"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="text-slate-300">Credit Limit</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          placeholder="5000.00"
+                          {...field}
+                          value={field.value || ''}
+                          onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                          className="bg-slate-700/50 border-slate-600 text-white"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <DialogFooter>
                 <Button

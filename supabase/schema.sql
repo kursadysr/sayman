@@ -61,6 +61,7 @@ CREATE TABLE accounts (
   name TEXT NOT NULL,
   type account_type NOT NULL DEFAULT 'bank',
   balance NUMERIC(15, 2) DEFAULT 0,
+  credit_limit NUMERIC(15, 2) DEFAULT NULL, -- Only for credit accounts
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
