@@ -38,7 +38,7 @@ interface Item {
   created_at: string;
   updated_at: string;
   base_unit?: UnitType;
-  item_units?: (ItemUnit & { unit_type?: UnitType })[];
+  item_units?: (ItemUnit & { unit_type?: UnitType; target_unit?: UnitType })[];
 }
 
 interface PriceHistory {
@@ -81,7 +81,7 @@ export default function ItemsPage() {
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ItemWithHistory | null>(null);
   const [selectedBaseUnitId, setSelectedBaseUnitId] = useState<string>('');
-  const [newPackageUnits, setNewPackageUnits] = useState<{ unitTypeId: string; conversionFactor: number; isDefault: boolean }[]>([]);
+  const [newPackageUnits, setNewPackageUnits] = useState<{ unitTypeId: string; targetUnitId: string; conversionFactor: number; isDefault: boolean }[]>([]);
   const [savingUnits, setSavingUnits] = useState(false);
 
   // Load vendors and unit types
@@ -103,6 +103,9 @@ export default function ItemsPage() {
           .or(`tenant_id.is.null,tenant_id.eq.${tenant.id}`)
           .order('name'),
       ]);
+
+      if (vendorsRes.error) console.error('Error loading vendors:', vendorsRes.error);
+      if (unitTypesRes.error) console.error('Error loading unit types:', unitTypesRes.error);
 
       setVendors((vendorsRes.data || []) as Contact[]);
       setUnitTypes((unitTypesRes.data || []) as UnitType[]);
@@ -193,15 +196,48 @@ export default function ItemsPage() {
     setLoading(true);
     const supabase = createClient();
 
-    // Get items for this vendor with base_unit and item_units
-    const { data: itemsData } = await supabase
+    // Get items for this vendor
+    const { data: itemsData, error: itemsError } = await supabase
       .from('items')
-      .select('*, base_unit:unit_types(*), item_units(*, unit_type:unit_types(*))')
+      .select('*')
       .eq('tenant_id', tenant.id)
       .eq('vendor_id', selectedVendorId)
       .order('name');
 
-    const loadedItems = (itemsData || []) as Item[];
+    if (itemsError) {
+      console.error('Error loading items:', itemsError);
+    }
+    
+    console.log('Loaded items:', itemsData?.length || 0);
+    
+    // Fetch base_unit and item_units separately if items exist
+    let loadedItems: Item[] = [];
+    if (itemsData && itemsData.length > 0) {
+      const itemIds = itemsData.map(i => i.id);
+      
+      // Get item_units for all items
+      const { data: itemUnitsData } = await supabase
+        .from('item_units')
+        .select('*')
+        .in('item_id', itemIds);
+      
+      // Get unit types for base units
+      const baseUnitIds = itemsData.map(i => i.base_unit_id).filter(Boolean);
+      let unitTypesMap: Record<string, any> = {};
+      if (baseUnitIds.length > 0) {
+        const { data: unitsData } = await supabase
+          .from('unit_types')
+          .select('*')
+          .in('id', baseUnitIds);
+        unitTypesMap = (unitsData || []).reduce((acc, u) => ({ ...acc, [u.id]: u }), {});
+      }
+      
+      loadedItems = itemsData.map(item => ({
+        ...item,
+        base_unit: item.base_unit_id ? unitTypesMap[item.base_unit_id] : null,
+        item_units: (itemUnitsData || []).filter(iu => iu.item_id === item.id),
+      })) as Item[];
+    }
 
     // Get price history and analytics for each item from bill_lines
     const itemsWithHistory: ItemWithHistory[] = await Promise.all(
@@ -322,6 +358,7 @@ export default function ItemsPage() {
     setNewPackageUnits(
       (item.item_units || []).map(iu => ({
         unitTypeId: iu.unit_type_id,
+        targetUnitId: iu.target_unit_id || '',
         conversionFactor: iu.conversion_factor,
         isDefault: iu.is_default,
       }))
@@ -337,7 +374,7 @@ export default function ItemsPage() {
   };
 
   const addPackageUnit = () => {
-    setNewPackageUnits([...newPackageUnits, { unitTypeId: '', conversionFactor: 1, isDefault: false }]);
+    setNewPackageUnits([...newPackageUnits, { unitTypeId: '', targetUnitId: '', conversionFactor: 1, isDefault: false }]);
   };
 
   const removePackageUnit = (index: number) => {
@@ -352,30 +389,21 @@ export default function ItemsPage() {
     );
   };
 
-  const saveUnits = async () => {
+const saveUnits = async () => {
     if (!selectedItem || !tenant) return;
 
     setSavingUnits(true);
     const supabase = createClient();
 
     try {
-      // Update item's base_unit_id
-      await supabase
-        .from('items')
-        .update({ 
-          base_unit_id: selectedBaseUnitId || null,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedItem.id);
-
       // Delete existing item_units
       await supabase
         .from('item_units')
         .delete()
         .eq('item_id', selectedItem.id);
 
-      // Insert new item_units
-      const validUnits = newPackageUnits.filter(pu => pu.unitTypeId && pu.conversionFactor > 0);
+      // Insert new item_units (must have both units and conversion factor)
+      const validUnits = newPackageUnits.filter(pu => pu.unitTypeId && pu.targetUnitId && pu.conversionFactor > 0);
       if (validUnits.length > 0) {
         await supabase
           .from('item_units')
@@ -383,6 +411,7 @@ export default function ItemsPage() {
             validUnits.map(pu => ({
               item_id: selectedItem.id,
               unit_type_id: pu.unitTypeId,
+              target_unit_id: pu.targetUnitId,
               conversion_factor: pu.conversionFactor,
               is_default: pu.isDefault,
             }))
@@ -705,109 +734,116 @@ export default function ItemsPage() {
 
       {/* Unit Management Dialog */}
       <Dialog open={unitDialogOpen} onOpenChange={setUnitDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 max-w-md">
+        <DialogContent className="bg-slate-800 border-slate-700 max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-white">Manage Units</DialogTitle>
             <DialogDescription className="text-slate-400">
-              {selectedItem?.name} - Set base unit and custom package conversions
+              {selectedItem?.name} - Define unit conversions
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Base Unit Selection */}
-            <div>
-              <Label className="text-slate-300">Base Unit (for analytics)</Label>
-              <Select 
-                value={selectedBaseUnitId || 'none'} 
-                onValueChange={(v) => setSelectedBaseUnitId(v === 'none' ? '' : v)}
+            {/* Add unit button */}
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={addPackageUnit}
+                className="text-emerald-400 hover:text-emerald-300"
               >
-                <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white mt-1">
-                  <SelectValue placeholder="Select base unit" />
-                </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700">
-                  <SelectItem value="none" className="text-slate-400">None</SelectItem>
-                  {baseUnits.map((unit) => (
-                    <SelectItem key={unit.id} value={unit.id} className="text-white">
-                      {unit.name} ({unit.symbol})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-slate-500 mt-1">
-                All quantities will be converted to this unit for comparison
-              </p>
+                <Plus className="h-4 w-4 mr-1" />
+                Add Conversion
+              </Button>
             </div>
 
-            {/* Package Units */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label className="text-slate-300">Package Units</Label>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={addPackageUnit}
-                  className="text-emerald-400 hover:text-emerald-300"
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add
-                </Button>
-              </div>
-
-              {newPackageUnits.length === 0 ? (
-                <p className="text-xs text-slate-500">
-                  No custom package units defined. Add one to track items like &quot;box&quot; or &quot;case&quot;.
+            {newPackageUnits.length === 0 ? (
+              <div className="text-center py-6 border border-dashed border-slate-600 rounded-lg">
+                <p className="text-sm text-slate-400">No unit conversions defined</p>
+                <p className="text-xs text-slate-500 mt-2">
+                  Examples:<br />
+                  1 box = 4 pack<br />
+                  1 pack = 5 lb
                 </p>
-              ) : (
-                <div className="space-y-3">
-                  {newPackageUnits.map((pu, index) => (
-                    <div key={index} className="p-3 bg-slate-700/30 rounded-lg space-y-2">
-                      <div className="flex items-center gap-2">
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {newPackageUnits.map((pu, index) => {
+                  const fromUnit = unitTypes.find(u => u.id === pu.unitTypeId);
+                  const toUnit = unitTypes.find(u => u.id === pu.targetUnitId);
+                  
+                  return (
+                    <div key={index} className="p-3 bg-slate-700/30 rounded-lg">
+                      {/* Conversion: 1 [unit A] = [X] [unit B] */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-slate-400 text-sm font-medium">1</span>
+                        
+                        {/* From unit */}
                         <Select 
                           value={pu.unitTypeId} 
                           onValueChange={(v) => updatePackageUnit(index, 'unitTypeId', v)}
                         >
-                          <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white flex-1">
-                            <SelectValue placeholder="Select unit" />
+                          <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white w-24 h-9">
+                            <SelectValue placeholder="unit" />
                           </SelectTrigger>
                           <SelectContent className="bg-slate-800 border-slate-700">
-                            {unitTypes.filter(u => !u.is_base).map((unit) => (
+                            {unitTypes.map((unit) => (
                               <SelectItem key={unit.id} value={unit.id} className="text-white">
-                                {unit.name} ({unit.symbol})
+                                {unit.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
+                        
+                        <span className="text-slate-400 text-sm">=</span>
+                        
+                        {/* Quantity */}
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={pu.conversionFactor || ''}
+                          onChange={(e) => updatePackageUnit(index, 'conversionFactor', parseFloat(e.target.value) || 0)}
+                          className="bg-slate-700/50 border-slate-600 text-white w-16 h-9 text-center"
+                          placeholder="0"
+                        />
+                        
+                        {/* To unit */}
+                        <Select 
+                          value={pu.targetUnitId} 
+                          onValueChange={(v) => updatePackageUnit(index, 'targetUnitId', v)}
+                        >
+                          <SelectTrigger className="bg-slate-700/50 border-slate-600 text-emerald-400 w-24 h-9">
+                            <SelectValue placeholder="unit" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-800 border-slate-700">
+                            {unitTypes.map((unit) => (
+                              <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                {unit.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        
+                        {/* Delete button */}
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
                           onClick={() => removePackageUnit(index)}
-                          className="text-red-400 hover:text-red-300 h-10 w-10 p-0"
+                          className="text-red-400 hover:text-red-300 h-9 w-9 p-0"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1">
-                          <Label className="text-xs text-slate-400">
-                            = how many {baseUnits.find(u => u.id === selectedBaseUnitId)?.symbol || 'base units'}?
-                          </Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={pu.conversionFactor}
-                            onChange={(e) => updatePackageUnit(index, 'conversionFactor', parseFloat(e.target.value) || 0)}
-                            className="bg-slate-700/50 border-slate-600 text-white"
-                            placeholder="e.g., 20 for a 20 lb box"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 pt-5">
+                      
+                      {/* Default checkbox and summary */}
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-700/50">
+                        <div className="flex items-center gap-2">
                           <input
                             type="checkbox"
+                            id={`default-${index}`}
                             checked={pu.isDefault}
                             onChange={(e) => {
-                              // Only one can be default
                               if (e.target.checked) {
                                 setNewPackageUnits(newPackageUnits.map((p, i) => ({
                                   ...p,
@@ -819,14 +855,30 @@ export default function ItemsPage() {
                             }}
                             className="rounded border-slate-600"
                           />
-                          <Label className="text-xs text-slate-400">Default</Label>
+                          <Label htmlFor={`default-${index}`} className="text-xs text-slate-400 cursor-pointer">
+                            Default when buying
+                          </Label>
                         </div>
+                        
+                        {/* Show summary */}
+                        {fromUnit && toUnit && pu.conversionFactor > 0 && (
+                          <span className="text-xs text-emerald-400">
+                            1 {fromUnit.symbol} = {pu.conversionFactor} {toUnit.symbol}
+                          </span>
+                        )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            {/* Helpful example */}
+            {newPackageUnits.length > 0 && (
+              <p className="text-xs text-slate-500 italic">
+                Tip: For chicken in boxes with 4 packs of 5 lb each, add: 1 box = 4 pack, 1 pack = 5 lb
+              </p>
+            )}
           </div>
 
           <DialogFooter>

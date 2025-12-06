@@ -107,10 +107,12 @@ export interface ItemUnit {
   id: string;
   item_id: string;
   unit_type_id: string;
+  target_unit_id?: string;
   conversion_factor: number;
   is_default: boolean;
   created_at: string;
   unit_type?: UnitType;
+  target_unit?: UnitType;
 }
 
 export interface Contact {

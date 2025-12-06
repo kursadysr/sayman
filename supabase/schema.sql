@@ -131,7 +131,8 @@ CREATE TABLE item_units (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   unit_type_id UUID NOT NULL REFERENCES unit_types(id) ON DELETE CASCADE,
-  conversion_factor NUMERIC(15, 6) NOT NULL,  -- How many base units in 1 of this unit
+  target_unit_id UUID REFERENCES unit_types(id) ON DELETE CASCADE,  -- Unit being converted to
+  conversion_factor NUMERIC(15, 6) NOT NULL,  -- 1 unit_type = X target_unit
   is_default BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(item_id, unit_type_id)
@@ -646,6 +647,7 @@ CREATE INDEX idx_unit_types_tenant ON unit_types(tenant_id);
 CREATE INDEX idx_unit_types_category ON unit_types(category_id);
 CREATE INDEX idx_item_units_item ON item_units(item_id);
 CREATE INDEX idx_item_units_unit_type ON item_units(unit_type_id);
+CREATE INDEX idx_item_units_target_unit ON item_units(target_unit_id);
 CREATE INDEX idx_bill_lines_unit_type ON bill_lines(unit_type_id);
 CREATE INDEX idx_bill_lines_item_unit ON bill_lines(item_id, unit_type_id);
 
