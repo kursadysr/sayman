@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Check, ChevronsUpDown, Plus, Building2, User, Briefcase } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -45,6 +45,12 @@ export function TenantSwitcher() {
   const [newTenantType, setNewTenantType] = useState<TenantType>('personal');
   const [newTenantCurrency, setNewTenantCurrency] = useState('USD');
   const [loading, setLoading] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  // Prevent hydration mismatch with Radix UI components
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleCreateTenant = async () => {
     if (!newTenantName.trim()) return;
@@ -89,6 +95,22 @@ export function TenantSwitcher() {
   };
 
   const Icon = tenant ? tenantTypeIcons[tenant.type] : User;
+
+  // Render placeholder button until client-side hydration is complete
+  if (!mounted) {
+    return (
+      <Button
+        variant="outline"
+        className="w-[200px] justify-between bg-slate-800/50 border-slate-700 text-white"
+      >
+        <div className="flex items-center gap-2 truncate">
+          <Icon className="h-4 w-4 text-emerald-400" />
+          <span className="truncate">{tenant?.name || 'Select workspace'}</span>
+        </div>
+        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+      </Button>
+    );
+  }
 
   return (
     <>

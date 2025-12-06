@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -48,6 +48,12 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
   const router = useRouter();
   const { tenant, tenants, setTenants, setCurrentTenant } = useTenant();
   const hasHydrated = useTenantStore((state) => state.hasHydrated);
+  const [mounted, setMounted] = useState(false);
+
+  // Prevent hydration mismatch with Radix UI components
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Load tenants after store hydration
   useEffect(() => {
@@ -151,55 +157,61 @@ export function AppShell({ children, onAddClick }: AppShellProps) {
 
       {/* Mobile Header */}
       <header className="fixed top-0 z-40 flex h-16 w-full items-center justify-between border-b border-slate-700/50 bg-slate-900/80 backdrop-blur-xl px-4 lg:hidden">
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" className="text-white">
-              <Menu className="h-6 w-6" />
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="left" className="w-64 bg-slate-900 border-slate-700 p-0">
-            <div className="flex h-full flex-col">
-              <div className="flex h-16 items-center gap-2 border-b border-slate-700/50 px-6">
-                <span className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-                  Sayman
-                </span>
+        {mounted ? (
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon" className="text-white">
+                <Menu className="h-6 w-6" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="left" className="w-64 bg-slate-900 border-slate-700 p-0">
+              <div className="flex h-full flex-col">
+                <div className="flex h-16 items-center gap-2 border-b border-slate-700/50 px-6">
+                  <span className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+                    Sayman
+                  </span>
+                </div>
+                <div className="p-4">
+                  <TenantSwitcher />
+                </div>
+                <nav className="flex-1 space-y-1 px-3 py-2">
+                  {navigation.map((item) => {
+                    const isActive = pathname === item.href;
+                    return (
+                      <Link
+                        key={item.name}
+                        href={item.href}
+                        className={cn(
+                          'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
+                          isActive
+                            ? 'bg-emerald-500/10 text-emerald-400'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                        )}
+                      >
+                        <item.icon className="h-5 w-5" />
+                        {item.name}
+                      </Link>
+                    );
+                  })}
+                </nav>
+                <div className="border-t border-slate-700/50 p-4">
+                  <Button
+                    variant="ghost"
+                    onClick={handleSignOut}
+                    className="w-full justify-start text-slate-400 hover:bg-slate-800 hover:text-white"
+                  >
+                    <LogOut className="mr-3 h-5 w-5" />
+                    Sign Out
+                  </Button>
+                </div>
               </div>
-              <div className="p-4">
-                <TenantSwitcher />
-              </div>
-              <nav className="flex-1 space-y-1 px-3 py-2">
-                {navigation.map((item) => {
-                  const isActive = pathname === item.href;
-                  return (
-                    <Link
-                      key={item.name}
-                      href={item.href}
-                      className={cn(
-                        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all',
-                        isActive
-                          ? 'bg-emerald-500/10 text-emerald-400'
-                          : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                      )}
-                    >
-                      <item.icon className="h-5 w-5" />
-                      {item.name}
-                    </Link>
-                  );
-                })}
-              </nav>
-              <div className="border-t border-slate-700/50 p-4">
-                <Button
-                  variant="ghost"
-                  onClick={handleSignOut}
-                  className="w-full justify-start text-slate-400 hover:bg-slate-800 hover:text-white"
-                >
-                  <LogOut className="mr-3 h-5 w-5" />
-                  Sign Out
-                </Button>
-              </div>
-            </div>
-          </SheetContent>
-        </Sheet>
+            </SheetContent>
+          </Sheet>
+        ) : (
+          <Button variant="ghost" size="icon" className="text-white">
+            <Menu className="h-6 w-6" />
+          </Button>
+        )}
 
         <span className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
           Sayman
