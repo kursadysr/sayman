@@ -35,7 +35,7 @@ import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, generateId } from '@/lib/utils/format';
-import type { Bill, BillLine, Contact, Item } from '@/lib/supabase/types';
+import type { Bill, BillLine, Contact, Item, UnitType, ItemUnit } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
 const formSchema = z.object({
@@ -56,6 +56,21 @@ interface LineItem {
   quantity: number;
   unit_price: number;
   tax_rate: number;
+  unit_category_id: string | null;
+  unit_type_id: string | null;
+  base_quantity: number | null;
+}
+
+interface UnitCategory {
+  id: string;
+  name: string;
+  base_unit_name: string;
+  base_unit_symbol: string;
+}
+
+interface ItemWithUnits extends Item {
+  base_unit?: UnitType;
+  item_units?: (ItemUnit & { unit_type?: UnitType })[];
 }
 
 interface EditBillDrawerProps {
@@ -69,10 +84,12 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const { tenant } = useTenant();
   const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState<Contact[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
+  const [items, setItems] = useState<ItemWithUnits[]>([]);
+  const [unitCategories, setUnitCategories] = useState<UnitCategory[]>([]);
+  const [unitTypes, setUnitTypes] = useState<UnitType[]>([]);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
-  const [suggestions, setSuggestions] = useState<Item[]>([]);
+  const [suggestions, setSuggestions] = useState<ItemWithUnits[]>([]);
   const [originalLineIds, setOriginalLineIds] = useState<string[]>([]);
 
   const form = useForm<FormValues>({
@@ -104,14 +121,14 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
         description: bill.description || '',
       });
 
-      // Load bill lines
+      // Load bill lines with unit info
       const { data: linesData } = await supabase
         .from('bill_lines')
-        .select('*')
+        .select('*, unit_type:unit_types(*)')
         .eq('bill_id', bill.id)
         .order('sort_order');
 
-      const lines = (linesData || []) as BillLine[];
+      const lines = (linesData || []) as (BillLine & { unit_type?: UnitType })[];
 
       if (lines.length > 0) {
         setLineItems(
@@ -123,6 +140,9 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
             quantity: line.quantity,
             unit_price: line.unit_price,
             tax_rate: line.tax_rate,
+            unit_category_id: line.unit_type?.category_id || null,
+            unit_type_id: line.unit_type_id || null,
+            base_quantity: line.base_quantity || null,
           }))
         );
         setOriginalLineIds(lines.map((l) => l.id));
@@ -136,6 +156,9 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
             quantity: 1,
             unit_price: bill.total_amount,
             tax_rate: 0,
+            unit_category_id: null,
+            unit_type_id: null,
+            base_quantity: null,
           },
         ]);
         setOriginalLineIds([]);
@@ -145,24 +168,37 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     loadBillData();
   }, [bill, open, form]);
 
-  // Load vendors
+  // Load vendors, unit categories, and unit types
   useEffect(() => {
     if (!tenant || !open) return;
 
-    const loadVendors = async () => {
+    const loadData = async () => {
       const supabase = createClient();
 
-      const { data: vendorsData } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .eq('type', 'vendor')
-        .order('name');
+      const [vendorsRes, categoriesRes, unitTypesRes] = await Promise.all([
+        supabase
+          .from('contacts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .eq('type', 'vendor')
+          .order('name'),
+        supabase
+          .from('unit_categories')
+          .select('*')
+          .order('name'),
+        supabase
+          .from('unit_types')
+          .select('*, category:unit_categories(*)')
+          .or(`tenant_id.is.null,tenant_id.eq.${tenant.id}`)
+          .order('name'),
+      ]);
 
-      setVendors((vendorsData || []) as Contact[]);
+      setVendors((vendorsRes.data || []) as Contact[]);
+      setUnitCategories((categoriesRes.data || []) as UnitCategory[]);
+      setUnitTypes((unitTypesRes.data || []) as UnitType[]);
     };
 
-    loadVendors();
+    loadData();
   }, [tenant, open]);
 
   // Load items for the selected vendor
@@ -177,12 +213,12 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
 
       const { data: itemsData } = await supabase
         .from('items')
-        .select('*')
+        .select('*, base_unit:unit_types(*), item_units(*, unit_type:unit_types(*))')
         .eq('tenant_id', tenant.id)
         .eq('vendor_id', selectedVendorId)
         .order('name');
 
-      setItems((itemsData || []) as Item[]);
+      setItems((itemsData || []) as ItemWithUnits[]);
     };
 
     loadItems();
@@ -207,11 +243,24 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
     }
   };
 
-  const selectSuggestion = (lineId: string, item: Item) => {
+  const selectSuggestion = (lineId: string, item: ItemWithUnits) => {
+    // Find default unit or base unit
+    const defaultUnit = item.item_units?.find(iu => iu.is_default)?.unit_type;
+    const unitToUse = defaultUnit || item.base_unit;
+    const categoryId = unitToUse?.category_id || item.base_unit?.category_id || null;
+    
     setLineItems(
       lineItems.map((li) =>
         li.id === lineId
-          ? { ...li, item_id: item.id, description: item.name, unit_price: item.last_unit_price }
+          ? { 
+              ...li, 
+              item_id: item.id, 
+              description: item.name, 
+              unit_price: item.last_unit_price,
+              unit_category_id: categoryId,
+              unit_type_id: unitToUse?.id || null,
+              base_quantity: null
+            }
           : li
       )
     );
@@ -230,8 +279,72 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
   const addLineItem = () => {
     setLineItems([
       ...lineItems,
-      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null },
     ]);
+  };
+
+  // Calculate base quantity from quantity and unit type
+  const calculateBaseQuantity = (quantity: number, unitTypeId: string | null, itemId: string | null): number | null => {
+    if (!unitTypeId) return null;
+    
+    const item = items.find(i => i.id === itemId);
+    const unitType = unitTypes.find(u => u.id === unitTypeId);
+    
+    if (!unitType) return null;
+    
+    // Check if item has a custom conversion for this unit
+    const itemUnit = item?.item_units?.find(iu => iu.unit_type_id === unitTypeId);
+    if (itemUnit) {
+      return quantity * itemUnit.conversion_factor;
+    }
+    
+    // Use standard conversion factor
+    return quantity * unitType.to_base_factor;
+  };
+
+  // Get available units for a line item filtered by category
+  const getAvailableUnits = (itemId: string | null, categoryId: string | null): UnitType[] => {
+    const item = items.find(i => i.id === itemId);
+    
+    // If item has custom units defined, prioritize those
+    if (item?.item_units && item.item_units.length > 0) {
+      const itemUnitTypes = item.item_units
+        .map(iu => iu.unit_type)
+        .filter((u): u is UnitType => !!u);
+      
+      // Add base unit if not already included
+      if (item.base_unit && !itemUnitTypes.find(u => u.id === item.base_unit?.id)) {
+        return [item.base_unit, ...itemUnitTypes];
+      }
+      return itemUnitTypes;
+    }
+    
+    // Filter by category if selected
+    if (categoryId) {
+      return unitTypes.filter(u => u.category_id === categoryId);
+    }
+    
+    // No category selected - return empty
+    return [];
+  };
+
+  // Handle category change - auto-select first unit in category
+  const handleCategoryChange = (lineId: string, categoryId: string) => {
+    const unitsInCategory = unitTypes.filter(u => u.category_id === categoryId);
+    const baseUnit = unitsInCategory.find(u => u.is_base);
+    const defaultUnit = baseUnit || unitsInCategory[0];
+    
+    setLineItems(
+      lineItems.map((li) =>
+        li.id === lineId
+          ? { 
+              ...li, 
+              unit_category_id: categoryId,
+              unit_type_id: defaultUnit?.id || null
+            }
+          : li
+      )
+    );
   };
 
   const removeLineItem = (id: string) => {
@@ -343,6 +456,8 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
           tax_rate: lineItem.tax_rate,
           total: lineItem.quantity * lineItem.unit_price * (1 + lineItem.tax_rate / 100),
           sort_order: i,
+          unit_type_id: lineItem.unit_type_id,
+          base_quantity: calculateBaseQuantity(lineItem.quantity, lineItem.unit_type_id, lineItem.item_id),
         };
 
         if (lineItem.db_id) {
@@ -365,7 +480,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
 
   const handleClose = () => {
     form.reset();
-    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null }]);
     setSuggestions([]);
     setActiveItemIndex(null);
     setItems([]);
@@ -544,6 +659,7 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                         )}
                       </div>
 
+                      {/* Quantity and Unit Selection */}
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <Label className="text-xs text-slate-400">Qty</Label>
@@ -557,6 +673,83 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                             className="bg-slate-700/50 border-slate-600 text-white"
                           />
                         </div>
+                        
+                        {/* Show simplified unit selection for items with custom units */}
+                        {(() => {
+                          const selectedItem = items.find(i => i.id === item.item_id);
+                          const hasCustomUnits = selectedItem?.item_units && selectedItem.item_units.length > 0;
+                          
+                          if (hasCustomUnits) {
+                            const availableUnits = getAvailableUnits(item.item_id, null);
+                            return (
+                              <div className="col-span-2">
+                                <Label className="text-xs text-slate-400">Unit</Label>
+                                <Select 
+                                  value={item.unit_type_id || ''} 
+                                  onValueChange={(value) => updateLineItem(item.id, 'unit_type_id', value || null)}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder="Select unit" />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {availableUnits.map((unit) => (
+                                      <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                        {unit.symbol} ({unit.name})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            );
+                          }
+                          
+                          const availableUnits = getAvailableUnits(item.item_id, item.unit_category_id);
+                          return (
+                            <>
+                              <div>
+                                <Label className="text-xs text-slate-400">Type</Label>
+                                <Select 
+                                  value={item.unit_category_id || ''} 
+                                  onValueChange={(value) => handleCategoryChange(item.id, value)}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder="Select" />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {unitCategories.map((cat) => (
+                                      <SelectItem key={cat.id} value={cat.id} className="text-white">
+                                        {cat.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-slate-400">Unit</Label>
+                                <Select 
+                                  value={item.unit_type_id || ''} 
+                                  onValueChange={(value) => updateLineItem(item.id, 'unit_type_id', value || null)}
+                                  disabled={!item.unit_category_id}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder={item.unit_category_id ? "Select" : "-"} />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {availableUnits.map((unit) => (
+                                      <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                        {unit.symbol}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Price and Tax */}
+                      <div className="grid grid-cols-2 gap-2">
                         <div>
                           <Label className="text-xs text-slate-400">Price</Label>
                           <Input
@@ -582,6 +775,21 @@ export function EditBillDrawer({ bill, open, onOpenChange, onSuccess }: EditBill
                           />
                         </div>
                       </div>
+
+                      {/* Show base quantity conversion */}
+                      {item.unit_type_id && (() => {
+                        const baseQty = calculateBaseQuantity(item.quantity, item.unit_type_id, item.item_id);
+                        const selectedItem = items.find(i => i.id === item.item_id);
+                        const baseUnit = selectedItem?.base_unit || unitTypes.find(u => u.id === item.unit_type_id);
+                        if (baseQty && baseUnit && item.unit_type_id !== baseUnit.id) {
+                          return (
+                            <div className="text-xs text-slate-400 text-right">
+                              = {baseQty.toFixed(2)} {baseUnit.symbol}
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   ))}
                 </div>

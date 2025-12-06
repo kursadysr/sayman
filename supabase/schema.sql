@@ -91,6 +91,28 @@ CREATE TABLE contacts (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Unit Categories (system-level measurement categories)
+CREATE TABLE unit_categories (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL UNIQUE,
+  base_unit_name TEXT NOT NULL,
+  base_unit_symbol TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Unit Types (tenant-customizable units)
+CREATE TABLE unit_types (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,  -- NULL = global/shared
+  category_id UUID NOT NULL REFERENCES unit_categories(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  to_base_factor NUMERIC(15, 6) NOT NULL DEFAULT 1,  -- Conversion factor to base unit
+  is_base BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(tenant_id, name)
+);
+
 -- Items (Products/Services for price tracking per vendor)
 CREATE TABLE items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -98,9 +120,21 @@ CREATE TABLE items (
   vendor_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   last_unit_price NUMERIC(15, 2) DEFAULT 0,
+  base_unit_id UUID REFERENCES unit_types(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(tenant_id, vendor_id, name)
+);
+
+-- Item Units (custom package definitions per item)
+CREATE TABLE item_units (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  item_id UUID NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  unit_type_id UUID NOT NULL REFERENCES unit_types(id) ON DELETE CASCADE,
+  conversion_factor NUMERIC(15, 6) NOT NULL,  -- How many base units in 1 of this unit
+  is_default BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(item_id, unit_type_id)
 );
 
 -- Bills (Accounts Payable)
@@ -159,6 +193,8 @@ CREATE TABLE bill_lines (
   tax_rate NUMERIC(5, 2) DEFAULT 0,
   total NUMERIC(15, 2) NOT NULL,
   sort_order INTEGER DEFAULT 0,
+  unit_type_id UUID REFERENCES unit_types(id) ON DELETE SET NULL,
+  base_quantity NUMERIC(15, 6),  -- Quantity converted to base unit
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -188,7 +224,10 @@ ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE unit_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE unit_types ENABLE ROW LEVEL SECURITY;
 ALTER TABLE items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE item_units ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bills ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
@@ -294,9 +333,42 @@ CREATE POLICY "Tenant isolation" ON categories
 CREATE POLICY "Tenant isolation" ON contacts
   FOR ALL USING (user_has_tenant_access(tenant_id));
 
+-- Unit categories: read-only for all authenticated users
+CREATE POLICY "Anyone can read unit categories" ON unit_categories
+  FOR SELECT USING (true);
+
+-- Unit types: users can see global units and their own tenant's units
+CREATE POLICY "View global and tenant units" ON unit_types
+  FOR SELECT USING (
+    tenant_id IS NULL OR user_has_tenant_access(tenant_id)
+  );
+
+CREATE POLICY "Create tenant units" ON unit_types
+  FOR INSERT WITH CHECK (
+    tenant_id IS NOT NULL AND user_has_tenant_access(tenant_id)
+  );
+
+CREATE POLICY "Update tenant units" ON unit_types
+  FOR UPDATE USING (
+    tenant_id IS NOT NULL AND user_has_tenant_access(tenant_id)
+  );
+
+CREATE POLICY "Delete tenant units" ON unit_types
+  FOR DELETE USING (
+    tenant_id IS NOT NULL AND user_has_tenant_access(tenant_id)
+  );
+
 -- Items: Tenant isolation
 CREATE POLICY "Tenant isolation" ON items
   FOR ALL USING (user_has_tenant_access(tenant_id));
+
+-- Item units: access through item
+CREATE POLICY "Access through item" ON item_units
+  FOR ALL USING (
+    item_id IN (
+      SELECT id FROM items WHERE user_has_tenant_access(tenant_id)
+    )
+  );
 
 -- Bills: Tenant isolation
 CREATE POLICY "Tenant isolation" ON bills
@@ -569,4 +641,11 @@ CREATE INDEX idx_bill_lines_bill ON bill_lines(bill_id);
 CREATE INDEX idx_invoice_lines_invoice ON invoice_lines(invoice_id);
 CREATE INDEX idx_items_tenant ON items(tenant_id);
 CREATE INDEX idx_items_name ON items(tenant_id, name);
+CREATE INDEX idx_items_base_unit ON items(base_unit_id);
+CREATE INDEX idx_unit_types_tenant ON unit_types(tenant_id);
+CREATE INDEX idx_unit_types_category ON unit_types(category_id);
+CREATE INDEX idx_item_units_item ON item_units(item_id);
+CREATE INDEX idx_item_units_unit_type ON item_units(unit_type_id);
+CREATE INDEX idx_bill_lines_unit_type ON bill_lines(unit_type_id);
+CREATE INDEX idx_bill_lines_item_unit ON bill_lines(item_id, unit_type_id);
 

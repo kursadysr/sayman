@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Package, Pencil, Check, X, TrendingUp, TrendingDown } from 'lucide-react';
+import { Package, Pencil, Check, X, TrendingUp, TrendingDown, Plus, Trash2, Settings2, BarChart3, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -12,11 +13,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useTenant } from '@/hooks/use-tenant';
 import { useRole } from '@/hooks/use-role';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, formatDate } from '@/lib/utils/format';
-import type { Contact } from '@/lib/supabase/types';
+import type { Contact, UnitType, ItemUnit } from '@/lib/supabase/types';
+import { toast } from 'sonner';
 
 interface Item {
   id: string;
@@ -24,20 +34,35 @@ interface Item {
   vendor_id: string;
   name: string;
   last_unit_price: number;
+  base_unit_id: string | null;
   created_at: string;
   updated_at: string;
+  base_unit?: UnitType;
+  item_units?: (ItemUnit & { unit_type?: UnitType })[];
 }
-import { toast } from 'sonner';
 
 interface PriceHistory {
   date: string;
   unit_price: number;
   quantity: number;
+  base_quantity: number | null;
+  unit_symbol: string | null;
   bill_number: string | null;
+}
+
+interface ConsumptionAnalytics {
+  totalBaseQuantity: number;
+  weeklyAverage: number;
+  monthlyAverage: number;
+  avgDaysBetweenPurchases: number | null;
+  avgPricePerBaseUnit: number | null;
+  lastPurchaseDate: string | null;
+  estimatedDaysUntilReorder: number | null;
 }
 
 interface ItemWithHistory extends Item {
   priceHistory: PriceHistory[];
+  analytics?: ConsumptionAnalytics;
 }
 
 export default function ItemsPage() {
@@ -46,29 +71,117 @@ export default function ItemsPage() {
   const [vendors, setVendors] = useState<Contact[]>([]);
   const [selectedVendorId, setSelectedVendorId] = useState<string>('');
   const [items, setItems] = useState<ItemWithHistory[]>([]);
+  const [unitTypes, setUnitTypes] = useState<UnitType[]>([]);
   const [loading, setLoading] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+  
+  // Unit management state
+  const [unitDialogOpen, setUnitDialogOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<ItemWithHistory | null>(null);
+  const [selectedBaseUnitId, setSelectedBaseUnitId] = useState<string>('');
+  const [newPackageUnits, setNewPackageUnits] = useState<{ unitTypeId: string; conversionFactor: number; isDefault: boolean }[]>([]);
+  const [savingUnits, setSavingUnits] = useState(false);
 
-  // Load vendors
+  // Load vendors and unit types
   useEffect(() => {
     if (!tenant) return;
 
-    const loadVendors = async () => {
+    const loadData = async () => {
       const supabase = createClient();
-      const { data } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('tenant_id', tenant.id)
-        .eq('type', 'vendor')
-        .order('name');
+      const [vendorsRes, unitTypesRes] = await Promise.all([
+        supabase
+          .from('contacts')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .eq('type', 'vendor')
+          .order('name'),
+        supabase
+          .from('unit_types')
+          .select('*, category:unit_categories(*)')
+          .or(`tenant_id.is.null,tenant_id.eq.${tenant.id}`)
+          .order('name'),
+      ]);
 
-      setVendors((data || []) as Contact[]);
+      setVendors((vendorsRes.data || []) as Contact[]);
+      setUnitTypes((unitTypesRes.data || []) as UnitType[]);
     };
 
-    loadVendors();
+    loadData();
   }, [tenant]);
+
+  // Calculate consumption analytics from bill lines data
+  const calculateAnalytics = (
+    allHistory: { date: string; base_quantity: number | null; unit_price: number; quantity: number }[]
+  ): ConsumptionAnalytics => {
+    if (allHistory.length === 0) {
+      return {
+        totalBaseQuantity: 0,
+        weeklyAverage: 0,
+        monthlyAverage: 0,
+        avgDaysBetweenPurchases: null,
+        avgPricePerBaseUnit: null,
+        lastPurchaseDate: null,
+        estimatedDaysUntilReorder: null,
+      };
+    }
+
+    // Sort by date ascending
+    const sorted = [...allHistory].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    // Total base quantity
+    const totalBaseQuantity = sorted.reduce((sum, h) => sum + (h.base_quantity || h.quantity), 0);
+    
+    // Calculate time span in days
+    const firstDate = new Date(sorted[0].date);
+    const lastDate = new Date(sorted[sorted.length - 1].date);
+    const daySpan = Math.max(1, Math.ceil((lastDate.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    // Weekly and monthly averages
+    const weeklyAverage = (totalBaseQuantity / daySpan) * 7;
+    const monthlyAverage = (totalBaseQuantity / daySpan) * 30;
+    
+    // Average days between purchases
+    let avgDaysBetweenPurchases: number | null = null;
+    if (sorted.length >= 2) {
+      const intervals: number[] = [];
+      for (let i = 1; i < sorted.length; i++) {
+        const d1 = new Date(sorted[i - 1].date);
+        const d2 = new Date(sorted[i].date);
+        intervals.push(Math.ceil((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+      avgDaysBetweenPurchases = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+    }
+    
+    // Average price per base unit
+    let avgPricePerBaseUnit: number | null = null;
+    const validPrices = sorted.filter(h => h.base_quantity && h.base_quantity > 0);
+    if (validPrices.length > 0) {
+      const totalCost = validPrices.reduce((sum, h) => sum + (h.unit_price * h.quantity), 0);
+      const totalBase = validPrices.reduce((sum, h) => sum + (h.base_quantity || 0), 0);
+      avgPricePerBaseUnit = totalBase > 0 ? totalCost / totalBase : null;
+    }
+    
+    // Estimated days until reorder (based on average consumption)
+    let estimatedDaysUntilReorder: number | null = null;
+    if (avgDaysBetweenPurchases && sorted.length >= 2) {
+      const daysSinceLastPurchase = Math.ceil(
+        (new Date().getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+      estimatedDaysUntilReorder = Math.max(0, Math.round(avgDaysBetweenPurchases - daysSinceLastPurchase));
+    }
+
+    return {
+      totalBaseQuantity,
+      weeklyAverage,
+      monthlyAverage,
+      avgDaysBetweenPurchases,
+      avgPricePerBaseUnit,
+      lastPurchaseDate: sorted[sorted.length - 1].date,
+      estimatedDaysUntilReorder,
+    };
+  };
 
   // Load items for selected vendor
   const loadItems = useCallback(async () => {
@@ -80,22 +193,23 @@ export default function ItemsPage() {
     setLoading(true);
     const supabase = createClient();
 
-    // Get items for this vendor
+    // Get items for this vendor with base_unit and item_units
     const { data: itemsData } = await supabase
       .from('items')
-      .select('*')
+      .select('*, base_unit:unit_types(*), item_units(*, unit_type:unit_types(*))')
       .eq('tenant_id', tenant.id)
       .eq('vendor_id', selectedVendorId)
       .order('name');
 
     const loadedItems = (itemsData || []) as Item[];
 
-    // Get price history for each item from bill_lines
+    // Get price history and analytics for each item from bill_lines
     const itemsWithHistory: ItemWithHistory[] = await Promise.all(
       loadedItems.map(async (item) => {
+        // Get recent history for display (limited)
         const { data: historyData } = await supabase
           .from('bill_lines')
-          .select('unit_price, quantity, created_at, bill:bills(bill_number, issue_date)')
+          .select('unit_price, quantity, base_quantity, created_at, bill:bills(bill_number, issue_date), unit_type:unit_types(symbol)')
           .eq('item_id', item.id)
           .order('created_at', { ascending: false })
           .limit(10);
@@ -104,10 +218,31 @@ export default function ItemsPage() {
           date: h.bill?.issue_date || h.created_at,
           unit_price: h.unit_price,
           quantity: h.quantity,
+          base_quantity: h.base_quantity,
+          unit_symbol: h.unit_type?.symbol || null,
           bill_number: h.bill?.bill_number,
         }));
 
-        return { ...item, priceHistory };
+        // Get all history for analytics (last 90 days)
+        const ninetyDaysAgo = new Date();
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+        
+        const { data: analyticsData } = await supabase
+          .from('bill_lines')
+          .select('unit_price, quantity, base_quantity, bill:bills(issue_date)')
+          .eq('item_id', item.id)
+          .gte('created_at', ninetyDaysAgo.toISOString());
+
+        const analyticsHistory = (analyticsData || []).map((h: any) => ({
+          date: h.bill?.issue_date || '',
+          base_quantity: h.base_quantity,
+          unit_price: h.unit_price,
+          quantity: h.quantity,
+        })).filter(h => h.date);
+
+        const analytics = calculateAnalytics(analyticsHistory);
+
+        return { ...item, priceHistory, analytics };
       })
     );
 
@@ -179,6 +314,94 @@ export default function ItemsPage() {
     const change = ((latest - previous) / previous) * 100;
     return change;
   };
+
+  // Open unit management dialog
+  const openUnitDialog = (item: ItemWithHistory) => {
+    setSelectedItem(item);
+    setSelectedBaseUnitId(item.base_unit_id || '');
+    setNewPackageUnits(
+      (item.item_units || []).map(iu => ({
+        unitTypeId: iu.unit_type_id,
+        conversionFactor: iu.conversion_factor,
+        isDefault: iu.is_default,
+      }))
+    );
+    setUnitDialogOpen(true);
+  };
+
+  const closeUnitDialog = () => {
+    setUnitDialogOpen(false);
+    setSelectedItem(null);
+    setSelectedBaseUnitId('');
+    setNewPackageUnits([]);
+  };
+
+  const addPackageUnit = () => {
+    setNewPackageUnits([...newPackageUnits, { unitTypeId: '', conversionFactor: 1, isDefault: false }]);
+  };
+
+  const removePackageUnit = (index: number) => {
+    setNewPackageUnits(newPackageUnits.filter((_, i) => i !== index));
+  };
+
+  const updatePackageUnit = (index: number, field: string, value: string | number | boolean) => {
+    setNewPackageUnits(
+      newPackageUnits.map((pu, i) => 
+        i === index ? { ...pu, [field]: value } : pu
+      )
+    );
+  };
+
+  const saveUnits = async () => {
+    if (!selectedItem || !tenant) return;
+
+    setSavingUnits(true);
+    const supabase = createClient();
+
+    try {
+      // Update item's base_unit_id
+      await supabase
+        .from('items')
+        .update({ 
+          base_unit_id: selectedBaseUnitId || null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedItem.id);
+
+      // Delete existing item_units
+      await supabase
+        .from('item_units')
+        .delete()
+        .eq('item_id', selectedItem.id);
+
+      // Insert new item_units
+      const validUnits = newPackageUnits.filter(pu => pu.unitTypeId && pu.conversionFactor > 0);
+      if (validUnits.length > 0) {
+        await supabase
+          .from('item_units')
+          .insert(
+            validUnits.map(pu => ({
+              item_id: selectedItem.id,
+              unit_type_id: pu.unitTypeId,
+              conversion_factor: pu.conversionFactor,
+              is_default: pu.isDefault,
+            }))
+          );
+      }
+
+      toast.success('Units updated');
+      closeUnitDialog();
+      loadItems();
+    } catch (error) {
+      console.error('Error saving units:', error);
+      toast.error('Failed to save units');
+    } finally {
+      setSavingUnits(false);
+    }
+  };
+
+  // Get base units only (for base unit selection)
+  const baseUnits = unitTypes.filter(u => u.is_base);
 
   if (!tenant) {
     return (
@@ -282,16 +505,34 @@ export default function ItemsPage() {
                               </div>
                             ) : (
                               <div className="flex items-center gap-2">
-                                <span className="font-medium text-white">{item.name}</span>
+                                <div>
+                                  <span className="font-medium text-white">{item.name}</span>
+                                  {item.base_unit && (
+                                    <span className="ml-2 text-xs text-slate-400">
+                                      ({item.base_unit.symbol})
+                                    </span>
+                                  )}
+                                </div>
                                 {canWrite && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => handleStartEdit(item)}
-                                    className="text-slate-400 hover:text-white h-6 w-6 p-0"
-                                  >
-                                    <Pencil className="h-3 w-3" />
-                                  </Button>
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => handleStartEdit(item)}
+                                      className="text-slate-400 hover:text-white h-6 w-6 p-0"
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => openUnitDialog(item)}
+                                      className="text-slate-400 hover:text-white h-6 w-6 p-0"
+                                      title="Manage Units"
+                                    >
+                                      <Settings2 className="h-3 w-3" />
+                                    </Button>
+                                  </>
                                 )}
                               </div>
                             )}
@@ -339,35 +580,118 @@ export default function ItemsPage() {
                         </div>
                       </div>
 
-                      {/* Price History */}
-                      {isExpanded && item.priceHistory.length > 0 && (
-                        <div className="border-t border-slate-700 bg-slate-800/50 p-4">
-                          <h4 className="text-sm font-medium text-slate-400 mb-3">Price History</h4>
-                          <div className="space-y-2">
-                            {item.priceHistory.map((history, idx) => (
-                              <div
-                                key={idx}
-                                className="flex items-center justify-between text-sm py-2 border-b border-slate-700/50 last:border-0"
-                              >
-                                <div className="text-slate-400">
-                                  {formatDate(history.date)}
-                                  {history.bill_number && (
-                                    <span className="ml-2 text-slate-500">
-                                      #{history.bill_number}
-                                    </span>
-                                  )}
+                      {/* Price History & Analytics */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-700 bg-slate-800/50">
+                          {/* Consumption Analytics */}
+                          {item.analytics && item.base_unit && (
+                            <div className="p-4 border-b border-slate-700">
+                              <h4 className="text-sm font-medium text-slate-400 mb-3 flex items-center gap-2">
+                                <BarChart3 className="h-4 w-4" />
+                                Consumption Analytics (90 days)
+                              </h4>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {/* Weekly Average */}
+                                <div className="bg-slate-700/30 rounded-lg p-3">
+                                  <div className="text-xs text-slate-400 flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    Weekly Avg
+                                  </div>
+                                  <div className="text-lg font-bold text-white mt-1">
+                                    {item.analytics.weeklyAverage.toFixed(1)}
+                                    <span className="text-xs text-slate-400 ml-1">{item.base_unit.symbol}</span>
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-4">
-                                  <span className="text-slate-400">
-                                    Qty: {history.quantity}
-                                  </span>
-                                  <span className="font-medium text-white">
-                                    {formatCurrency(history.unit_price, tenant.currency)}
-                                  </span>
+                                
+                                {/* Monthly Average */}
+                                <div className="bg-slate-700/30 rounded-lg p-3">
+                                  <div className="text-xs text-slate-400 flex items-center gap-1">
+                                    <Calendar className="h-3 w-3" />
+                                    Monthly Avg
+                                  </div>
+                                  <div className="text-lg font-bold text-white mt-1">
+                                    {item.analytics.monthlyAverage.toFixed(1)}
+                                    <span className="text-xs text-slate-400 ml-1">{item.base_unit.symbol}</span>
+                                  </div>
                                 </div>
+                                
+                                {/* Days Between Purchases */}
+                                {item.analytics.avgDaysBetweenPurchases !== null && (
+                                  <div className="bg-slate-700/30 rounded-lg p-3">
+                                    <div className="text-xs text-slate-400 flex items-center gap-1">
+                                      <Clock className="h-3 w-3" />
+                                      Buy Every
+                                    </div>
+                                    <div className="text-lg font-bold text-white mt-1">
+                                      {Math.round(item.analytics.avgDaysBetweenPurchases)}
+                                      <span className="text-xs text-slate-400 ml-1">days</span>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Price per Base Unit */}
+                                {item.analytics.avgPricePerBaseUnit !== null && (
+                                  <div className="bg-slate-700/30 rounded-lg p-3">
+                                    <div className="text-xs text-slate-400">
+                                      Avg Price/{item.base_unit.symbol}
+                                    </div>
+                                    <div className="text-lg font-bold text-emerald-400 mt-1">
+                                      {formatCurrency(item.analytics.avgPricePerBaseUnit, tenant.currency)}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            ))}
-                          </div>
+                              
+                              {/* Reorder Alert */}
+                              {item.analytics.estimatedDaysUntilReorder !== null && item.analytics.estimatedDaysUntilReorder <= 7 && (
+                                <div className="mt-3 p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                                  <p className="text-xs text-amber-400">
+                                    {item.analytics.estimatedDaysUntilReorder === 0 
+                                      ? '⚠️ Based on your buying pattern, you may need to reorder soon!'
+                                      : `⚠️ Estimated ${item.analytics.estimatedDaysUntilReorder} days until next purchase`
+                                    }
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Price History */}
+                          {item.priceHistory.length > 0 && (
+                            <div className="p-4">
+                              <h4 className="text-sm font-medium text-slate-400 mb-3">Price History</h4>
+                              <div className="space-y-2">
+                                {item.priceHistory.map((history, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex items-center justify-between text-sm py-2 border-b border-slate-700/50 last:border-0"
+                                  >
+                                    <div className="text-slate-400">
+                                      {formatDate(history.date)}
+                                      {history.bill_number && (
+                                        <span className="ml-2 text-slate-500">
+                                          #{history.bill_number}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-4">
+                                      <span className="text-slate-400">
+                                        {history.quantity} {history.unit_symbol || 'ea'}
+                                        {history.base_quantity && history.unit_symbol && (
+                                          <span className="text-slate-500 ml-1">
+                                            (= {history.base_quantity.toFixed(2)} {item.base_unit?.symbol || 'base'})
+                                          </span>
+                                        )}
+                                      </span>
+                                      <span className="font-medium text-white">
+                                        {formatCurrency(history.unit_price, tenant.currency)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -378,6 +702,151 @@ export default function ItemsPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Unit Management Dialog */}
+      <Dialog open={unitDialogOpen} onOpenChange={setUnitDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white">Manage Units</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {selectedItem?.name} - Set base unit and custom package conversions
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Base Unit Selection */}
+            <div>
+              <Label className="text-slate-300">Base Unit (for analytics)</Label>
+              <Select 
+                value={selectedBaseUnitId || 'none'} 
+                onValueChange={(v) => setSelectedBaseUnitId(v === 'none' ? '' : v)}
+              >
+                <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white mt-1">
+                  <SelectValue placeholder="Select base unit" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem value="none" className="text-slate-400">None</SelectItem>
+                  {baseUnits.map((unit) => (
+                    <SelectItem key={unit.id} value={unit.id} className="text-white">
+                      {unit.name} ({unit.symbol})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-slate-500 mt-1">
+                All quantities will be converted to this unit for comparison
+              </p>
+            </div>
+
+            {/* Package Units */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-slate-300">Package Units</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={addPackageUnit}
+                  className="text-emerald-400 hover:text-emerald-300"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add
+                </Button>
+              </div>
+
+              {newPackageUnits.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No custom package units defined. Add one to track items like &quot;box&quot; or &quot;case&quot;.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {newPackageUnits.map((pu, index) => (
+                    <div key={index} className="p-3 bg-slate-700/30 rounded-lg space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Select 
+                          value={pu.unitTypeId} 
+                          onValueChange={(v) => updatePackageUnit(index, 'unitTypeId', v)}
+                        >
+                          <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white flex-1">
+                            <SelectValue placeholder="Select unit" />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-800 border-slate-700">
+                            {unitTypes.filter(u => !u.is_base).map((unit) => (
+                              <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                {unit.name} ({unit.symbol})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removePackageUnit(index)}
+                          className="text-red-400 hover:text-red-300 h-10 w-10 p-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <Label className="text-xs text-slate-400">
+                            = how many {baseUnits.find(u => u.id === selectedBaseUnitId)?.symbol || 'base units'}?
+                          </Label>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={pu.conversionFactor}
+                            onChange={(e) => updatePackageUnit(index, 'conversionFactor', parseFloat(e.target.value) || 0)}
+                            className="bg-slate-700/50 border-slate-600 text-white"
+                            placeholder="e.g., 20 for a 20 lb box"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2 pt-5">
+                          <input
+                            type="checkbox"
+                            checked={pu.isDefault}
+                            onChange={(e) => {
+                              // Only one can be default
+                              if (e.target.checked) {
+                                setNewPackageUnits(newPackageUnits.map((p, i) => ({
+                                  ...p,
+                                  isDefault: i === index
+                                })));
+                              } else {
+                                updatePackageUnit(index, 'isDefault', false);
+                              }
+                            }}
+                            className="rounded border-slate-600"
+                          />
+                          <Label className="text-xs text-slate-400">Default</Label>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={closeUnitDialog}
+              className="border-slate-600 text-slate-300"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={saveUnits}
+              disabled={savingUnits}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              {savingUnits ? 'Saving...' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

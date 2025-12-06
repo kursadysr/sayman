@@ -36,7 +36,7 @@ import { Label } from '@/components/ui/label';
 import { useTenant } from '@/hooks/use-tenant';
 import { createClient } from '@/lib/supabase/client';
 import { formatCurrency, generateId, checkAccountFunds } from '@/lib/utils/format';
-import type { Contact, Item, Account } from '@/lib/supabase/types';
+import type { Contact, Item, Account, UnitType, ItemUnit } from '@/lib/supabase/types';
 import { toast } from 'sonner';
 
 const formSchema = z.object({
@@ -57,6 +57,21 @@ interface LineItem {
   quantity: number;
   unit_price: number;
   tax_rate: number;
+  unit_category_id: string | null;
+  unit_type_id: string | null;
+  base_quantity: number | null;
+}
+
+interface UnitCategory {
+  id: string;
+  name: string;
+  base_unit_name: string;
+  base_unit_symbol: string;
+}
+
+interface ItemWithUnits extends Item {
+  base_unit?: UnitType;
+  item_units?: (ItemUnit & { unit_type?: UnitType })[];
 }
 
 interface AddBillDrawerProps {
@@ -70,12 +85,14 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
   const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState<Contact[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
+  const [items, setItems] = useState<ItemWithUnits[]>([]);
+  const [unitCategories, setUnitCategories] = useState<UnitCategory[]>([]);
+  const [unitTypes, setUnitTypes] = useState<UnitType[]>([]);
   const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+    { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null },
   ]);
   const [activeItemIndex, setActiveItemIndex] = useState<number | null>(null);
-  const [suggestions, setSuggestions] = useState<Item[]>([]);
+  const [suggestions, setSuggestions] = useState<ItemWithUnits[]>([]);
   const [markAsPaid, setMarkAsPaid] = useState(false);
 
   const form = useForm<FormValues>({
@@ -96,14 +113,14 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
   // No vendor = always paid, with vendor = check toggle
   const isPaidNow = !selectedVendorId || markAsPaid;
 
-  // Load vendors and accounts
+  // Load vendors, accounts, unit categories, and unit types
   useEffect(() => {
     if (!tenant || !open) return;
 
     const loadData = async () => {
       const supabase = createClient();
       
-      const [vendorsRes, accountsRes] = await Promise.all([
+      const [vendorsRes, accountsRes, categoriesRes, unitTypesRes] = await Promise.all([
         supabase
           .from('contacts')
           .select('*')
@@ -115,10 +132,21 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
           .select('*')
           .eq('tenant_id', tenant.id)
           .order('name'),
+        supabase
+          .from('unit_categories')
+          .select('*')
+          .order('name'),
+        supabase
+          .from('unit_types')
+          .select('*, category:unit_categories(*)')
+          .or(`tenant_id.is.null,tenant_id.eq.${tenant.id}`)
+          .order('name'),
       ]);
 
       setVendors((vendorsRes.data || []) as Contact[]);
       setAccounts((accountsRes.data || []) as Account[]);
+      setUnitCategories((categoriesRes.data || []) as UnitCategory[]);
+      setUnitTypes((unitTypesRes.data || []) as UnitType[]);
     };
 
     loadData();
@@ -136,12 +164,12 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
       
       const { data: itemsData } = await supabase
         .from('items')
-        .select('*')
+        .select('*, base_unit:unit_types(*), item_units(*, unit_type:unit_types(*))')
         .eq('tenant_id', tenant.id)
         .eq('vendor_id', selectedVendorId)
         .order('name');
 
-      setItems((itemsData || []) as Item[]);
+      setItems((itemsData || []) as ItemWithUnits[]);
     };
 
     loadItems();
@@ -174,11 +202,26 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
     }
   };
 
-  const selectSuggestion = (lineId: string, item: Item) => {
+  const selectSuggestion = (lineId: string, item: ItemWithUnits) => {
+    // Find default unit or base unit
+    const defaultUnit = item.item_units?.find(iu => iu.is_default)?.unit_type;
+    const unitToUse = defaultUnit || item.base_unit;
+    
+    // Get category from the unit
+    const categoryId = unitToUse?.category_id || item.base_unit?.category_id || null;
+    
     setLineItems(
       lineItems.map((li) =>
         li.id === lineId
-          ? { ...li, item_id: item.id, description: item.name, unit_price: item.last_unit_price }
+          ? { 
+              ...li, 
+              item_id: item.id, 
+              description: item.name, 
+              unit_price: item.last_unit_price,
+              unit_category_id: categoryId,
+              unit_type_id: unitToUse?.id || null,
+              base_quantity: null
+            }
           : li
       )
     );
@@ -198,8 +241,73 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
   const addLineItem = () => {
     setLineItems([
       ...lineItems,
-      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 },
+      { id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null },
     ]);
+  };
+
+  // Calculate base quantity from quantity and unit type
+  const calculateBaseQuantity = (quantity: number, unitTypeId: string | null, itemId: string | null): number | null => {
+    if (!unitTypeId) return null;
+    
+    const item = items.find(i => i.id === itemId);
+    const unitType = unitTypes.find(u => u.id === unitTypeId);
+    
+    if (!unitType) return null;
+    
+    // Check if item has a custom conversion for this unit
+    const itemUnit = item?.item_units?.find(iu => iu.unit_type_id === unitTypeId);
+    if (itemUnit) {
+      return quantity * itemUnit.conversion_factor;
+    }
+    
+    // Use standard conversion factor
+    return quantity * unitType.to_base_factor;
+  };
+
+  // Get available units for a line item filtered by category
+  const getAvailableUnits = (itemId: string | null, categoryId: string | null): UnitType[] => {
+    const item = items.find(i => i.id === itemId);
+    
+    // If item has custom units defined, prioritize those
+    if (item?.item_units && item.item_units.length > 0) {
+      const itemUnitTypes = item.item_units
+        .map(iu => iu.unit_type)
+        .filter((u): u is UnitType => !!u);
+      
+      // Add base unit if not already included
+      if (item.base_unit && !itemUnitTypes.find(u => u.id === item.base_unit?.id)) {
+        return [item.base_unit, ...itemUnitTypes];
+      }
+      return itemUnitTypes;
+    }
+    
+    // Filter by category if selected
+    if (categoryId) {
+      return unitTypes.filter(u => u.category_id === categoryId);
+    }
+    
+    // No category selected - return empty (user must select category first)
+    return [];
+  };
+
+  // Handle category change - auto-select first unit in category
+  const handleCategoryChange = (lineId: string, categoryId: string) => {
+    const unitsInCategory = unitTypes.filter(u => u.category_id === categoryId);
+    // Find base unit in this category, or first unit
+    const baseUnit = unitsInCategory.find(u => u.is_base);
+    const defaultUnit = baseUnit || unitsInCategory[0];
+    
+    setLineItems(
+      lineItems.map((li) =>
+        li.id === lineId
+          ? { 
+              ...li, 
+              unit_category_id: categoryId,
+              unit_type_id: defaultUnit?.id || null
+            }
+          : li
+      )
+    );
   };
 
   const removeLineItem = (id: string) => {
@@ -324,6 +432,8 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
         tax_rate: item.tax_rate,
         total: item.quantity * item.unit_price * (1 + item.tax_rate / 100),
         sort_order: index,
+        unit_type_id: item.unit_type_id,
+        base_quantity: calculateBaseQuantity(item.quantity, item.unit_type_id, item.item_id),
       }));
 
       const { error: linesError } = await supabase
@@ -351,7 +461,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
 
       toast.success(isPaidNow ? 'Expense paid & saved' : 'Bill saved');
       form.reset();
-      setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+      setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null }]);
       setMarkAsPaid(false);
       onOpenChange(false);
       onSuccess?.();
@@ -365,7 +475,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
 
   const handleClose = () => {
     form.reset();
-    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0 }]);
+    setLineItems([{ id: generateId(), item_id: null, description: '', quantity: 1, unit_price: 0, tax_rate: 0, unit_category_id: null, unit_type_id: null, base_quantity: null }]);
     setMarkAsPaid(false);
     setSuggestions([]);
     setActiveItemIndex(null);
@@ -594,6 +704,7 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
                         )}
                       </div>
 
+                      {/* Quantity and Unit Selection */}
                       <div className="grid grid-cols-3 gap-2">
                         <div>
                           <Label className="text-xs text-slate-400">Qty</Label>
@@ -607,6 +718,85 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
                             className="bg-slate-700/50 border-slate-600 text-white"
                           />
                         </div>
+                        
+                        {/* Show simplified unit selection for items with custom units */}
+                        {(() => {
+                          const selectedItem = items.find(i => i.id === item.item_id);
+                          const hasCustomUnits = selectedItem?.item_units && selectedItem.item_units.length > 0;
+                          
+                          if (hasCustomUnits) {
+                            // Item has custom units - show single dropdown with item's units
+                            const availableUnits = getAvailableUnits(item.item_id, null);
+                            return (
+                              <div className="col-span-2">
+                                <Label className="text-xs text-slate-400">Unit</Label>
+                                <Select 
+                                  value={item.unit_type_id || ''} 
+                                  onValueChange={(value) => updateLineItem(item.id, 'unit_type_id', value || null)}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder="Select unit" />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {availableUnits.map((unit) => (
+                                      <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                        {unit.symbol} ({unit.name})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            );
+                          }
+                          
+                          // No custom units - show Category → Unit two-step selection
+                          const availableUnits = getAvailableUnits(item.item_id, item.unit_category_id);
+                          return (
+                            <>
+                              <div>
+                                <Label className="text-xs text-slate-400">Type</Label>
+                                <Select 
+                                  value={item.unit_category_id || ''} 
+                                  onValueChange={(value) => handleCategoryChange(item.id, value)}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder="Select" />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {unitCategories.map((cat) => (
+                                      <SelectItem key={cat.id} value={cat.id} className="text-white">
+                                        {cat.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs text-slate-400">Unit</Label>
+                                <Select 
+                                  value={item.unit_type_id || ''} 
+                                  onValueChange={(value) => updateLineItem(item.id, 'unit_type_id', value || null)}
+                                  disabled={!item.unit_category_id}
+                                >
+                                  <SelectTrigger className="bg-slate-700/50 border-slate-600 text-white h-10">
+                                    <SelectValue placeholder={item.unit_category_id ? "Select" : "-"} />
+                                  </SelectTrigger>
+                                  <SelectContent className="bg-slate-800 border-slate-700">
+                                    {availableUnits.map((unit) => (
+                                      <SelectItem key={unit.id} value={unit.id} className="text-white">
+                                        {unit.symbol}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Price and Tax */}
+                      <div className="grid grid-cols-2 gap-2">
                         <div>
                           <Label className="text-xs text-slate-400">Price</Label>
                           <Input
@@ -632,6 +822,21 @@ export function AddBillDrawer({ open, onOpenChange, onSuccess }: AddBillDrawerPr
                           />
                         </div>
                       </div>
+
+                      {/* Show base quantity conversion */}
+                      {item.unit_type_id && (() => {
+                        const baseQty = calculateBaseQuantity(item.quantity, item.unit_type_id, item.item_id);
+                        const selectedItem = items.find(i => i.id === item.item_id);
+                        const baseUnit = selectedItem?.base_unit || unitTypes.find(u => u.id === item.unit_type_id);
+                        if (baseQty && baseUnit && item.unit_type_id !== baseUnit.id) {
+                          return (
+                            <div className="text-xs text-slate-400 text-right">
+                              = {baseQty.toFixed(2)} {baseUnit.symbol}
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   ))}
                 </div>

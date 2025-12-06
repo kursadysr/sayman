@@ -50,24 +50,30 @@ USING (
 ### The Ledger
 4. **`accounts`**: Bank/cash/credit accounts with balances
 5. **`contacts`**: Vendors & customers with `balance` tracking
-6. **`items`**: Products/services per vendor with `last_unit_price`
+6. **`items`**: Products/services per vendor with `last_unit_price`, `base_unit_id`
+
+### Units (Industry-Agnostic)
+7. **`unit_categories`**: Weight, Volume, Length, Area, Count
+8. **`unit_types`**: lb, gallon, box, case, etc. (global + tenant custom)
+9. **`item_units`**: Custom package conversions per item (1 box = 20 lb)
 
 ### Documents
-7. **`bills`**: Expenses/Accounts Payable
-   - `vendor_id` (optional - null for quick expenses)
-   - `status`: unpaid, partial, paid
-   - Always uses line items for itemized tracking
+10. **`bills`**: Expenses/Accounts Payable
+    - `vendor_id` (optional - null for quick expenses)
+    - `status`: unpaid, partial, paid
+    - Always uses line items for itemized tracking
 
-8. **`bill_lines`**: Itemized bill entries
-   - `item_id` links to items table for price tracking
-   - `quantity`, `unit_price`, `tax_rate`, `total`
+11. **`bill_lines`**: Itemized bill entries
+    - `item_id` links to items table for price tracking
+    - `quantity`, `unit_price`, `tax_rate`, `total`
+    - `unit_type_id`, `base_quantity` for unit tracking
 
-9. **`invoices`**: Income/Accounts Receivable
-   - `customer_id`, `status`, `layout_type`
+12. **`invoices`**: Income/Accounts Receivable
+    - `customer_id`, `status`, `layout_type`
 
-10. **`invoice_lines`**: Invoice line items
+13. **`invoice_lines`**: Invoice line items
 
-11. **`transactions`**: Cash flow records (payments only)
+14. **`transactions`**: Cash flow records (payments only)
     - Links to `bill_id` or `invoice_id` when paying documents
     - Positive = income, Negative = expense
 
@@ -94,12 +100,23 @@ USING (
    - Always paid immediately
    - No price tracking (items table)
 
-### B. Item Price Tracking
+### B. Item Price Tracking & Units
 - Items are tracked per vendor
 - When entering a bill, typing suggests existing items
 - Selecting fills in last known price
 - Saving updates the item's `last_unit_price`
 - View price history in Items page
+
+### B2. Unit System (Industry-Agnostic)
+- **Unit Categories**: Weight, Volume, Length, Area, Count
+- **Base Units**: lb, gallon, ft, sqft, each (for analytics normalization)
+- **Custom Units**: Tenant can add custom units (box, case, pack)
+- **Item Package Units**: Define conversions per item (e.g., 1 box = 20 lb)
+- **Consumption Analytics**: 
+  - Weekly/monthly usage in base units
+  - Average days between purchases
+  - Estimated reorder time
+  - Price per base unit trends
 
 ### C. Contact Balances (Accounts Payable)
 - Each vendor has a `balance` field

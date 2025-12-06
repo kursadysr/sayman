@@ -70,14 +70,47 @@ export interface Category {
   created_at: string;
 }
 
+export interface UnitCategory {
+  id: string;
+  name: string;
+  base_unit_name: string;
+  base_unit_symbol: string;
+  created_at: string;
+}
+
+export interface UnitType {
+  id: string;
+  tenant_id: string | null;
+  category_id: string;
+  name: string;
+  symbol: string;
+  to_base_factor: number;
+  is_base: boolean;
+  created_at: string;
+  category?: UnitCategory;
+}
+
 export interface Item {
   id: string;
   tenant_id: string;
   vendor_id: string;
   name: string;
   last_unit_price: number;
+  base_unit_id: string | null;
   created_at: string;
   updated_at: string;
+  base_unit?: UnitType;
+  item_units?: ItemUnit[];
+}
+
+export interface ItemUnit {
+  id: string;
+  item_id: string;
+  unit_type_id: string;
+  conversion_factor: number;
+  is_default: boolean;
+  created_at: string;
+  unit_type?: UnitType;
 }
 
 export interface Contact {
@@ -148,8 +181,11 @@ export interface BillLine {
   tax_rate: number;
   total: number;
   sort_order: number;
+  unit_type_id: string | null;
+  base_quantity: number | null;
   created_at: string;
   item?: Item;
+  unit_type?: UnitType;
 }
 
 export interface Invoice {
@@ -285,6 +321,8 @@ export interface CreateBillLineInput {
   quantity: number;
   unit_price: number;
   tax_rate?: number;
+  unit_type_id?: string;
+  base_quantity?: number;
 }
 
 export interface CreateInvoiceInput {
