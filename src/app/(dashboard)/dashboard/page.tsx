@@ -243,44 +243,89 @@ export default function DashboardPage() {
         0
       );
 
-      // Get vendors for accounts payable
-      const { data: vendors } = await supabase
-        .from('contacts')
-        .select('balance')
+      // Get accounts payable from unpaid bills (more accurate than stored balance)
+      const { data: unpaidBills } = await supabase
+        .from('bills')
+        .select(`
+          id,
+          total_amount,
+          vendor_id
+        `)
         .eq('tenant_id', tenant.id)
-        .eq('type', 'vendor');
+        .neq('status', 'paid');
 
-      const vendorPayables = (vendors as { balance: number }[] || []).reduce(
-        (sum, v) => sum + Math.max(0, Number(v.balance)),
-        0
-      );
-
-      // Get employees for wages payable
-      const { data: employees } = await supabase
-        .from('contacts')
-        .select('balance')
+      // Get payments made against bills
+      const { data: billPayments } = await supabase
+        .from('transactions')
+        .select('bill_id, amount')
         .eq('tenant_id', tenant.id)
-        .eq('type', 'employee');
+        .not('bill_id', 'is', null);
 
-      const wagesPayable = (employees as { balance: number }[] || []).reduce(
-        (sum, e) => sum + Math.max(0, Number(e.balance)),
-        0
-      );
+      const billPaymentsMap = (billPayments || []).reduce((acc: Record<string, number>, p: any) => {
+        acc[p.bill_id] = (acc[p.bill_id] || 0) + Math.abs(Number(p.amount));
+        return acc;
+      }, {});
 
-      // Get loans
+      const vendorPayables = (unpaidBills || []).reduce((sum, bill: any) => {
+        const paid = billPaymentsMap[bill.id] || 0;
+        return sum + Math.max(0, Number(bill.total_amount) - paid);
+      }, 0);
+
+      // Get wages payable from unpaid timesheets
+      const { data: unpaidTimesheets } = await supabase
+        .from('timesheets')
+        .select('id, total_amount')
+        .eq('tenant_id', tenant.id)
+        .eq('status', 'unpaid');
+
+      // Get payments made against timesheets
+      const { data: timesheetPayments } = await supabase
+        .from('transactions')
+        .select('timesheet_id, amount')
+        .eq('tenant_id', tenant.id)
+        .not('timesheet_id', 'is', null);
+
+      const timesheetPaymentsMap = (timesheetPayments || []).reduce((acc: Record<string, number>, p: any) => {
+        acc[p.timesheet_id] = (acc[p.timesheet_id] || 0) + Math.abs(Number(p.amount));
+        return acc;
+      }, {});
+
+      const wagesPayable = (unpaidTimesheets || []).reduce((sum, ts: any) => {
+        const paid = timesheetPaymentsMap[ts.id] || 0;
+        return sum + Math.max(0, Number(ts.total_amount) - paid);
+      }, 0);
+
+      // Get loans with calculated remaining balance
       const { data: loansData } = await supabase
         .from('loans')
-        .select('type, remaining_balance, status')
+        .select('id, type, principal_amount, status')
         .eq('tenant_id', tenant.id)
         .eq('status', 'active');
 
+      // Get all loan payments
+      const { data: loanPaymentsData } = await supabase
+        .from('loan_payments')
+        .select('loan_id, principal_amount')
+        .eq('tenant_id', tenant.id);
+
+      const loanPaymentsMap = (loanPaymentsData || []).reduce((acc: Record<string, number>, p: any) => {
+        acc[p.loan_id] = (acc[p.loan_id] || 0) + Number(p.principal_amount);
+        return acc;
+      }, {});
+
       const loansPayable = (loansData || [])
         .filter((l: any) => l.type === 'payable')
-        .reduce((sum: number, l: any) => sum + Number(l.remaining_balance), 0);
+        .reduce((sum: number, l: any) => {
+          const paid = loanPaymentsMap[l.id] || 0;
+          return sum + Math.max(0, Number(l.principal_amount) - paid);
+        }, 0);
 
       const loansReceivable = (loansData || [])
         .filter((l: any) => l.type === 'receivable')
-        .reduce((sum: number, l: any) => sum + Number(l.remaining_balance), 0);
+        .reduce((sum: number, l: any) => {
+          const paid = loanPaymentsMap[l.id] || 0;
+          return sum + Math.max(0, Number(l.principal_amount) - paid);
+        }, 0);
 
       const totalPayables = vendorPayables + wagesPayable + loansPayable;
 
