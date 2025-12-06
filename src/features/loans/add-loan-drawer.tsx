@@ -52,7 +52,7 @@ const formSchema = z.object({
   start_date: z.string().min(1, 'Start date is required'),
   notes: z.string().optional(),
   // Double-entry accounting: disbursement account
-  record_disbursement: z.boolean().default(true),
+  record_disbursement: z.boolean(),
   account_id: z.string().optional(),
 });
 

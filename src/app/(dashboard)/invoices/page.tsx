@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Plus, FileText, Send, Clock, CheckCircle, FileEdit, DollarSign } from 'lucide-react';
@@ -56,6 +56,14 @@ interface InvoiceWithDetails extends Invoice {
 }
 
 export default function InvoicesPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-screen"><p className="text-slate-400">Loading...</p></div>}>
+      <InvoicesPageContent />
+    </Suspense>
+  );
+}
+
+function InvoicesPageContent() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
   const searchParams = useSearchParams();

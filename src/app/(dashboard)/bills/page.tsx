@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Receipt, Clock, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,14 @@ const statusConfig = {
 };
 
 export default function BillsPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-screen"><p className="text-slate-400">Loading...</p></div>}>
+      <BillsPageContent />
+    </Suspense>
+  );
+}
+
+function BillsPageContent() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
   const searchParams = useSearchParams();

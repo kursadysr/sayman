@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { Suspense, useEffect, useState, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Plus, Landmark, TrendingDown, TrendingUp, Calendar, Percent } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,14 @@ interface LoanWithBalance extends Loan {
 }
 
 export default function LoansPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-screen"><p className="text-slate-400">Loading...</p></div>}>
+      <LoansPageContent />
+    </Suspense>
+  );
+}
+
+function LoansPageContent() {
   const { tenant } = useTenant();
   const { canWrite } = useRole();
   const searchParams = useSearchParams();
